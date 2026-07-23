@@ -11,6 +11,8 @@ CHANNEL_SETTINGS_FILE = os.path.join(config.DATA_DIR, "channel_settings.json")
 
 CHANNEL_TYPES = {
     "alert": "警報・注意報",
+    "heatstroke": "熱中症警戒アラート",
+    "commentary": "気象解説情報",
 }
 
 
@@ -56,11 +58,16 @@ def save_channel_settings(settings: Dict[str, Dict[str, int]]) -> None:
 def get_channel_id(guild_id: int, channel_type: str) -> Optional[int]:
     settings = load_channel_settings()
     guild_settings = settings.get(str(guild_id), {})
+
     if channel_type in guild_settings:
         return guild_settings[channel_type]
 
-    if channel_type == "alert":
+    if channel_type in ("heatstroke", "commentary") and "alert" in guild_settings:
+        return guild_settings["alert"]
+
+    if channel_type in ("alert", "heatstroke", "commentary"):
         return config.ALERT_CHANNEL_ID or None
+
     return None
 
 
@@ -80,16 +87,27 @@ def get_all_channels(channel_type: str) -> List[int]:
     settings = load_channel_settings()
     channel_ids: List[int] = []
     seen = set()
-    for types in settings.values():
+
+    for guild_id_str, types in settings.items():
+        if not isinstance(types, dict):
+            continue
+
         ch_id = types.get(channel_type)
-        if ch_id is not None and ch_id not in seen:
-            seen.add(ch_id)
-            channel_ids.append(ch_id)
+        if ch_id is not None:
+            if ch_id not in seen:
+                seen.add(ch_id)
+                channel_ids.append(ch_id)
+        elif channel_type in ("heatstroke", "commentary"):
+            alert_id = types.get("alert")
+            if alert_id is not None and alert_id not in seen:
+                seen.add(alert_id)
+                channel_ids.append(alert_id)
 
     if not channel_ids:
+        if channel_type in ("heatstroke", "commentary"):
+            return get_all_channels("alert")
         if channel_type == "alert" and config.ALERT_CHANNEL_ID:
             channel_ids.append(config.ALERT_CHANNEL_ID)
-
     return channel_ids
 
 

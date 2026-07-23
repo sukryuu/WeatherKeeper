@@ -2,11 +2,21 @@ import discord
 from discord import app_commands, TextChannel
 import logging
 import os
+import io
 
 import config
 from src.scheduler import WeatherScheduler
-from src.jmaxml_parser import parse_warning_xml
-from src.discord_notifier import create_warning_embed
+from src.jmaxml_parser import (
+    parse_warning_xml,
+    parse_heatstroke_xml,
+    parse_commentary_xml,
+)
+from src.discord_notifier import (
+    create_warning_embed,
+    create_heatstroke_embed,
+    create_commentary_embed,
+)
+from src.warning_map import create_warning_map_image
 from src.channel_settings import (
     CHANNEL_TYPES,
     get_channel_id,
@@ -14,7 +24,6 @@ from src.channel_settings import (
     get_guild_settings,
 )
 
-# ログ設定
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -23,18 +32,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.propagate = False
 
-# Bot初期化
 intents = discord.Intents.default()
 bot = discord.Client(intents=intents)
 tree = app_commands.CommandTree(bot)
 scheduler = None
 
 SAMPLE_ALERT_FILE = os.path.join(config.DATA_DIR, "sample_alert.xml")
+SAMPLE_HEATSTROKE_FILE = os.path.join(config.DATA_DIR, "sample_heatstroke.xml")
+SAMPLE_COMMENTARY_FILE = os.path.join(config.DATA_DIR, "sample_commentary.xml")
 
 
-# ==========================================
-# 自動同期処理
-# ==========================================
 async def setup_hook():
     await tree.sync()
     logger.info("スラッシュコマンドを自動同期しました。")
@@ -43,9 +50,6 @@ async def setup_hook():
 bot.setup_hook = setup_hook
 
 
-# ==========================================
-# イベントハンドラ
-# ==========================================
 @bot.event
 async def on_ready():
     global scheduler
@@ -56,9 +60,6 @@ async def on_ready():
         logger.info("スケジューラーを開始しました。")
 
 
-# ==========================================
-# /channel コマンドグループ
-# ==========================================
 channel_group = app_commands.Group(name="channel", description="通知チャンネルの設定")
 
 
@@ -66,10 +67,14 @@ channel_group = app_commands.Group(name="channel", description="通知チャン�
     name="set",
     description="このチャンネルを指定種の通知先に設定します",
 )
-@app_commands.describe(type="通知種別 (alert=警報・注意報)")
+@app_commands.describe(
+    type="通知種別 (alert=警報・注意報, heatstroke=熱中症警戒アラート, commentary=気象解説情報)"
+)
 @app_commands.choices(
     type=[
         app_commands.Choice(name="警報・注意報", value="alert"),
+        app_commands.Choice(name="熱中症警戒アラート", value="heatstroke"),
+        app_commands.Choice(name="気象解説情報", value="commentary"),
     ]
 )
 async def channel_set(
@@ -160,29 +165,40 @@ async def channel_show(interaction: discord.Interaction):
 tree.add_command(channel_group)
 
 
-# ==========================================
-# /test_alert
-# ==========================================
 @tree.command(
     name="test_alert",
-    description="サンプルXMLから警報通知のテストメッセージを送信します",
+    description="サンプルXMLから防災情報のテストメッセージを送信します",
 )
-@app_commands.describe(send_to_channel="警報チャンネルにも送信する場合はtrue")
+@app_commands.describe(type="テストする情報の種別")
+@app_commands.choices(
+    type=[
+        app_commands.Choice(name="警報・注意報", value="alert"),
+        app_commands.Choice(name="熱中症警戒アラート", value="heatstroke"),
+        app_commands.Choice(name="気象解説情報", value="commentary"),
+    ]
+)
 async def test_alert(
     interaction: discord.Interaction,
-    send_to_channel: bool = False,
+    type: app_commands.Choice[str],
 ):
     await interaction.response.defer(ephemeral=True)
 
-    if not os.path.exists(SAMPLE_ALERT_FILE):
+    if type.value == "alert":
+        sample_file = SAMPLE_ALERT_FILE
+    elif type.value == "heatstroke":
+        sample_file = SAMPLE_HEATSTROKE_FILE
+    else:
+        sample_file = SAMPLE_COMMENTARY_FILE
+
+    if not os.path.exists(sample_file):
         await interaction.followup.send(
-            f"サンプルファイルが見つかりません: `{SAMPLE_ALERT_FILE}`",
+            f"サンプルファイルが見つかりません: `{sample_file}`",
             ephemeral=True,
         )
         return
 
     try:
-        with open(SAMPLE_ALERT_FILE, "r", encoding="utf-8") as f:
+        with open(sample_file, "r", encoding="utf-8") as f:
             xml_content = f.read()
     except IOError as e:
         logger.error(f"サンプルファイル読み込みエラー: {e}")
@@ -191,77 +207,87 @@ async def test_alert(
         )
         return
 
-    parsed_data = parse_warning_xml(xml_content)
+    if type.value == "alert":
+        parsed_data = parse_warning_xml(xml_content)
+    elif type.value == "heatstroke":
+        parsed_data = parse_heatstroke_xml(xml_content)
+    else:
+        parsed_data = parse_commentary_xml(xml_content)
+
     if not parsed_data:
         await interaction.followup.send(
             "サンプルXMLのパースに失敗しました", ephemeral=True
         )
         return
 
-    grouped_alerts = parsed_data.get("grouped_alerts", {})
-    if not grouped_alerts:
-        await interaction.followup.send(
-            "パース結果に警報データが含まれていません", ephemeral=True
-        )
-        return
-
-    embed = create_warning_embed(parsed_data)
-
-    max_level = max(lv for levels in grouped_alerts.values() for lv in levels)
-    kind_count = len(grouped_alerts)
-    area_count = len(
-        {
-            a
-            for levels in grouped_alerts.values()
-            for statuses in levels.values()
-            for areas in statuses.values()
-            for a in areas
-        }
-    )
-    summary = (
-        f"種別: {kind_count}件 / 対象地域: {area_count}件 / 最大レベル: {max_level}\n"
-        f"タイトル: {parsed_data.get('head_title', '---')}"
-    )
-
-    await interaction.followup.send(content=summary, embed=embed, ephemeral=True)
-
-    if send_to_channel:
-        guild_id = interaction.guild_id
-        if guild_id is None:
+    if type.value == "alert":
+        embed = create_warning_embed(parsed_data)
+        grouped_alerts = parsed_data.get("grouped_alerts", {})
+        if not grouped_alerts:
             await interaction.followup.send(
-                "サーバー内でのみチャンネル送信できます", ephemeral=True
+                "パース結果に警報データが含まれていません", ephemeral=True
             )
-        else:
-            ch_id = get_channel_id(guild_id, "alert")
-            channel = interaction.client.get_channel(ch_id) if ch_id else None
-            if isinstance(channel, TextChannel):
-                try:
-                    await channel.send(embed=embed)
-                    await interaction.followup.send(
-                        f"{channel.mention} にも送信しました", ephemeral=True
-                    )
-                except discord.DiscordException as e:
-                    logger.error(f"チャンネル送信に失敗: {e}")
-                    await interaction.followup.send(
-                        "チャンネル送信に失敗しました", ephemeral=True
-                    )
-            else:
-                await interaction.followup.send(
-                    "警報チャンネルが未設定または見つかりません", ephemeral=True
-                )
+            return
+        image_bytes = create_warning_map_image(
+            area_levels=parsed_data.get("area_levels", {}),
+            title=parsed_data.get("head_title", "気象警報・注意報 発表範囲"),
+        )
+        max_level = max(lv for levels in grouped_alerts.values() for lv in levels)
+        kind_count = len(grouped_alerts)
+        area_count = len(
+            {
+                a
+                for levels in grouped_alerts.values()
+                for statuses in levels.values()
+                for areas in statuses.values()
+                for a in areas
+            }
+        )
+        summary = (
+            f"種別: {kind_count}件 / 対象地域: {area_count}件 / 最大レベル: {max_level}\n"
+            f"タイトル: {parsed_data.get('head_title', '---')}"
+        )
+    elif type.value == "heatstroke":
+        embed = create_heatstroke_embed(parsed_data)
+        image_bytes = create_warning_map_image(
+            area_levels={},
+            heatstroke_wbgt=parsed_data.get("wbgt_readings", []),
+            heatstroke_special=parsed_data.get("is_special", False),
+            title=f"熱中症警戒アラート: {parsed_data.get('area_name', '')}",
+        )
+        wbgt = parsed_data.get("wbgt_readings", [])
+        temps = parsed_data.get("temp_readings", [])
+        summary = (
+            f"地域: {parsed_data.get('area_name', '---')}\n"
+            f"対象日: {parsed_data.get('target_label', '---')}\n"
+            f"WBGT予測: {wbgt}\n"
+            f"予想最高気温: {temps}"
+        )
+    else:
+        embed = create_commentary_embed(parsed_data)
+        image_bytes = None
+        summary = (
+            f"種別: {parsed_data.get('scope', '')}気象解説情報\n"
+            f"タイトル: {parsed_data.get('head_title', '---')}"
+        )
+
+    if image_bytes:
+        embed.set_image(url="attachment://test_map.png")
+
+    if image_bytes:
+        file = discord.File(io.BytesIO(image_bytes), filename="test_map.png")
+        await interaction.followup.send(
+            content=summary, embed=embed, file=file, ephemeral=True
+        )
+    else:
+        await interaction.followup.send(content=summary, embed=embed, ephemeral=True)
 
 
-# ==========================================
-# /ping
-# ==========================================
 @tree.command(name="ping", description="Botの応答確認")
 async def ping(interaction: discord.Interaction):
     await interaction.response.send_message("Pong!")
 
 
-# ==========================================
-# 起動
-# ==========================================
 if __name__ == "__main__":
     if not config.DISCORD_TOKEN:
         logger.error("DISCORD_TOKEN が設定されていません。")
