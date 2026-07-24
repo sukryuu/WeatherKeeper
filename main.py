@@ -3,6 +3,7 @@ from discord import app_commands, TextChannel
 import logging
 import os
 import io
+import asyncio
 
 import config
 from src.scheduler import WeatherScheduler
@@ -220,56 +221,69 @@ async def test_alert(
         )
         return
 
-    if type.value == "alert":
-        embed = create_warning_embed(parsed_data)
-        grouped_alerts = parsed_data.get("grouped_alerts", {})
-        if not grouped_alerts:
-            await interaction.followup.send(
-                "パース結果に警報データが含まれていません", ephemeral=True
+    image_bytes = None
+    try:
+        if type.value == "alert":
+            embed = create_warning_embed(parsed_data)
+            grouped_alerts = parsed_data.get("grouped_alerts", {})
+            if not grouped_alerts:
+                await interaction.followup.send(
+                    "パース結果に警報データが含まれていません", ephemeral=True
+                )
+                return
+
+            image_bytes = await asyncio.to_thread(   # ★ to_thread
+                create_warning_map_image,
+                area_levels=parsed_data.get("area_levels", {}),
+                title=parsed_data.get("head_title", "気象警報・注意報 発表範囲"),
             )
-            return
-        image_bytes = create_warning_map_image(
-            area_levels=parsed_data.get("area_levels", {}),
-            title=parsed_data.get("head_title", "気象警報・注意報 発表範囲"),
+
+            max_level = max(lv for levels in grouped_alerts.values() for lv in levels)
+            kind_count = len(grouped_alerts)
+            area_count = len(
+                {
+                    a
+                    for levels in grouped_alerts.values()
+                    for statuses in levels.values()
+                    for areas in statuses.values()
+                    for a in areas
+                }
+            )
+            summary = (
+                f"種別: {kind_count}件 / 対象地域: {area_count}件 / 最大レベル: {max_level}\n"
+                f"タイトル: {parsed_data.get('head_title', '---')}"
+            )
+        elif type.value == "heatstroke":
+            embed = create_heatstroke_embed(parsed_data)
+
+            image_bytes = await asyncio.to_thread(   # ★ to_thread
+                create_warning_map_image,
+                area_levels={},
+                heatstroke_area_names=[parsed_data.get("area_name", "")],
+                heatstroke_special=parsed_data.get("is_special", False),
+                title=f"熱中症警戒アラート: {parsed_data.get('area_name', '')}",
+            )
+
+            wbgt = parsed_data.get("wbgt_readings", [])
+            temps = parsed_data.get("temp_readings", [])
+            summary = (
+                f"地域: {parsed_data.get('area_name', '---')}\n"
+                f"対象日: {parsed_data.get('target_label', '---')}\n"
+                f"WBGT予測: {wbgt}\n"
+                f"予想最高気温: {temps}"
+            )
+        else:
+            embed = create_commentary_embed(parsed_data)
+            summary = (
+                f"種別: {parsed_data.get('scope', '')}気象解説情報\n"
+                f"タイトル: {parsed_data.get('head_title', '---')}"
+            )
+    except Exception as e:
+        logger.exception(f"テストメッセージ生成中にエラー: {e}")
+        await interaction.followup.send(
+            "テストメッセージの生成中にエラーが発生しました。", ephemeral=True
         )
-        max_level = max(lv for levels in grouped_alerts.values() for lv in levels)
-        kind_count = len(grouped_alerts)
-        area_count = len(
-            {
-                a
-                for levels in grouped_alerts.values()
-                for statuses in levels.values()
-                for areas in statuses.values()
-                for a in areas
-            }
-        )
-        summary = (
-            f"種別: {kind_count}件 / 対象地域: {area_count}件 / 最大レベル: {max_level}\n"
-            f"タイトル: {parsed_data.get('head_title', '---')}"
-        )
-    elif type.value == "heatstroke":
-        embed = create_heatstroke_embed(parsed_data)
-        image_bytes = create_warning_map_image(
-            area_levels={},
-            heatstroke_wbgt=parsed_data.get("wbgt_readings", []),
-            heatstroke_special=parsed_data.get("is_special", False),
-            title=f"熱中症警戒アラート: {parsed_data.get('area_name', '')}",
-        )
-        wbgt = parsed_data.get("wbgt_readings", [])
-        temps = parsed_data.get("temp_readings", [])
-        summary = (
-            f"地域: {parsed_data.get('area_name', '---')}\n"
-            f"対象日: {parsed_data.get('target_label', '---')}\n"
-            f"WBGT予測: {wbgt}\n"
-            f"予想最高気温: {temps}"
-        )
-    else:
-        embed = create_commentary_embed(parsed_data)
-        image_bytes = None
-        summary = (
-            f"種別: {parsed_data.get('scope', '')}気象解説情報\n"
-            f"タイトル: {parsed_data.get('head_title', '---')}"
-        )
+        return
 
     if image_bytes:
         embed.set_image(url="attachment://test_map.png")

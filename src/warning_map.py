@@ -3,7 +3,9 @@ import os
 import io
 import re
 import logging
+import platform
 from typing import Dict, List, Optional, Tuple
+from concurrent.futures import ProcessPoolExecutor
 
 import matplotlib
 import matplotlib.font_manager as fm
@@ -33,8 +35,10 @@ LEVEL_LABELS = {
     3: "警報",
     2: "注意報",
 }
-
-HEATSTROKE_WBGT_THRESHOLD = 31
+HEATSTROKE_COLORS = {
+    "alert": "#7A008A",
+    "special": "#000000",
+}
 
 LAND_COLOR = "#3D3C3C"
 SEA_COLOR = "#19191A"
@@ -47,32 +51,66 @@ PREF_EDGE_WIDTH = 0.6
 BASE_FIG_SIZE = 10
 MAP_ASPECT_RATIO = 1.5
 
-font_path = ""
-
-if os.path.exists(font_path):
-    fm.fontManager.addfont(font_path)
-    plt.rcParams["font.family"] = "Yu Gothic"
+if platform.system() == "Windows":
+    font_path = "C:/Windows/Fonts/NotoSansJP-Regular.otf"
+    if os.path.exists(font_path):
+        fm.fontManager.addfont(font_path)
+        plt.rcParams["font.family"] = "Yu Gothic"
+    else:
+        logger.warning(f"フォントファイルが見つかりません: {font_path}")
+        plt.rcParams["font.family"] = "Meiryo"
 else:
-    logger.warning(f"フォントファイルが見つかりません: {font_path}")
-    plt.rcParams["font.family"] = "Meiryo"
+    _linux_font_paths = [
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+    ]
+    for _p in _linux_font_paths:
+        if os.path.exists(_p):
+            fm.fontManager.addfont(_p)
+            break
+    _available = {f.name for f in fm.fontManager.ttflist}
+    _chosen = None
+    for _family in [
+        "Noto Sans CJK JP",
+        "Noto Sans JP",
+        "IPAexGothic",
+        "VL Gothic",
+        "DejaVu Sans",
+    ]:
+        if _family in _available:
+            _chosen = _family
+            break
+    if _chosen:
+        plt.rcParams["font.family"] = _chosen
+    else:
+        logger.warning("日本語フォント未検出")
 
 plt.rcParams["text.color"] = "#FFFFFF"
 plt.rcParams["axes.titlecolor"] = "#FFFFFF"
 plt.rcParams["legend.labelcolor"] = "#000000"
 
 _city_features: Optional[List[dict]] = None
+_pref_features: Optional[List[dict]] = None
+_map_executor: Optional[ProcessPoolExecutor] = None
+
+
+def get_map_executor() -> ProcessPoolExecutor:
+    global _map_executor
+    if _map_executor is None:
+        _map_executor = ProcessPoolExecutor(max_workers=1)
+    return _map_executor
 
 
 def _load_city_features() -> List[dict]:
     global _city_features
     if _city_features is not None:
         return _city_features
-
     if not os.path.exists(CITY_GEOJSON_FILE):
         logger.error(f"市町村GeoJSONが見つかりません: {CITY_GEOJSON_FILE}")
         _city_features = []
         return _city_features
-
     try:
         with open(CITY_GEOJSON_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -81,12 +119,8 @@ def _load_city_features() -> List[dict]:
     except (json.JSONDecodeError, IOError) as e:
         logger.error(f"市町村GeoJSONの読み込みに失敗: {e}")
         features = []
-
     _city_features = features
     return features
-
-
-_pref_features: Optional[List[dict]] = None
 
 
 def _load_pref_features() -> List[dict]:
@@ -124,7 +158,6 @@ def _extract_polygons(geometry: dict) -> List[List[Tuple[float, float]]]:
     polygons = []
     geom_type = geometry.get("type")
     coords = geometry.get("coordinates", [])
-
     if geom_type == "Polygon":
         if coords and coords[0]:
             polygons.append([(x, y) for x, y in coords[0]])
@@ -135,18 +168,22 @@ def _extract_polygons(geometry: dict) -> List[List[Tuple[float, float]]]:
     return polygons
 
 
-def _match_wbgt_place(props: dict, place: str) -> bool:
-    if not place:
-        return False
+def _match_heatstroke(props: dict, area_names: List[str]) -> bool:
     regionname = props.get("regionname", "")
-    name = props.get("name", "")
     pref = _get_feature_pref(props)
-    return any(place in t for t in (regionname, name, pref) if t)
+    for area_name in area_names:
+        if not area_name:
+            continue
+        if pref and (pref in area_name or area_name in pref):
+            return True
+        if regionname and (regionname in area_name or area_name in regionname):
+            return True
+    return False
 
 
 def create_warning_map_image(
     area_levels: Dict[str, int],
-    heatstroke_wbgt: Optional[List[Tuple[str, int]]] = None,
+    heatstroke_area_names: Optional[List[str]] = None,
     heatstroke_special: bool = False,
     title: str = "気象警報・注意報 発表範囲",
 ) -> Optional[bytes]:
@@ -162,36 +199,25 @@ def create_warning_map_image(
     drawn_x: List[float] = []
     drawn_y: List[float] = []
 
-    hs_places_31 = [
-        place
-        for place, value in (heatstroke_wbgt or [])
-        if value >= HEATSTROKE_WBGT_THRESHOLD
-    ]
-    has_heatstroke_paint = bool(hs_places_31)
+    hs_color = HEATSTROKE_COLORS["special" if heatstroke_special else "alert"]
 
     for feature in features:
         props = feature.get("properties", {})
         geometry = feature.get("geometry", {})
         if not geometry:
             continue
-
         polygons = _extract_polygons(geometry)
         if not polygons:
             continue
-
         code = _get_feature_code(props)
         level = area_levels.get(code)
         color = None
         if level and level in LEVEL_COLORS:
             color = LEVEL_COLORS[level]
-        elif hs_places_31 and any(
-            _match_wbgt_place(props, p) for p in hs_places_31
-        ):
-            color = LEVEL_COLORS[3]
-
+        elif heatstroke_area_names and _match_heatstroke(props, heatstroke_area_names):
+            color = hs_color
         if color is None:
             color = LAND_COLOR
-
         for poly_coords in polygons:
             patch = MplPolygon(
                 poly_coords,
@@ -202,7 +228,6 @@ def create_warning_map_image(
                 zorder=1,
             )
             ax.add_patch(patch)
-
             if color != LAND_COLOR:
                 xs, ys = zip(*poly_coords)
                 drawn_x.extend(xs)
@@ -259,7 +284,6 @@ def create_warning_map_image(
     ax.axis("off")
 
     legend_elements = []
-
     has_warning_levels = any(lv in LEVEL_COLORS for lv in area_levels.values())
     if has_warning_levels:
         for lv in sorted(LEVEL_COLORS.keys(), reverse=True):
@@ -274,8 +298,7 @@ def create_warning_map_image(
                     label=LEVEL_LABELS[lv],
                 )
             )
-
-    if has_heatstroke_paint:
+    if heatstroke_area_names:
         hs_label = (
             "熱中症特別警戒アラート" if heatstroke_special else "熱中症警戒アラート"
         )
@@ -285,17 +308,16 @@ def create_warning_map_image(
                 [0],
                 marker="s",
                 color="w",
-                markerfacecolor=LEVEL_COLORS[3],
+                markerfacecolor=hs_color,
                 markersize=12,
                 label=hs_label,
             )
         )
-
     if legend_elements:
         ax.legend(handles=legend_elements, loc="lower left", fontsize=9)
 
     buf = io.BytesIO()
-    fig.savefig(buf, format="png", dpi=120, facecolor=SEA_COLOR)
+    fig.savefig(buf, format="png", dpi=90, facecolor=SEA_COLOR)
     plt.close(fig)
     buf.seek(0)
     return buf.read()

@@ -3,12 +3,13 @@ from discord import TextChannel
 from discord.ext import tasks
 import json
 import os
+import io
 import logging
 import hashlib
 import asyncio
+import functools
 from datetime import datetime, timezone
 from typing import Set, Dict, Any
-import io
 
 import config
 from src.jmaxml_client import fetch_atom_feed, fetch_xml_content
@@ -23,7 +24,7 @@ from src.discord_notifier import (
     create_commentary_embed,
 )
 from src.channel_settings import get_all_channels
-from src.warning_map import create_warning_map_image
+from src.warning_map import create_warning_map_image, get_map_executor
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,6 @@ class WeatherScheduler:
         self.notified_hashes: Set[str] = set()
         self.last_check_time: str = ""
         self.load_state()
-
         self.check_warnings.start()
 
     def load_state(self):
@@ -100,7 +100,6 @@ class WeatherScheduler:
     def save_state(self):
         events_list = list(self.processed_events)[-500:]
         hashes_list = list(self.notified_hashes)[-500:]
-
         try:
             os.makedirs(config.DATA_DIR, exist_ok=True)
             with open(config.PROCESSED_EVENTS_FILE, "w", encoding="utf-8") as f:
@@ -121,12 +120,10 @@ class WeatherScheduler:
     @tasks.loop(minutes=1)
     async def check_warnings(self):
         urls_to_check = [config.JMA_ATOM_REGULAR_URL]
-
         for url in urls_to_check:
             entries = await asyncio.to_thread(fetch_atom_feed, url)
             if not entries:
                 continue
-
             for entry in entries:
                 title = entry["title"]
                 entry_updated = entry.get("updated", "")
@@ -225,11 +222,17 @@ class WeatherScheduler:
 
                 embed = create_warning_embed(parsed_data)
 
-                image_bytes = create_warning_map_image(
-                    area_levels=parsed_data.get("area_levels", {}),
-                    title=parsed_data.get("head_title", "気象警報・注意報 発表範囲"),
+                loop = asyncio.get_running_loop()
+                image_bytes = await loop.run_in_executor(
+                    get_map_executor(),
+                    functools.partial(
+                        create_warning_map_image,
+                        area_levels=parsed_data.get("area_levels", {}),
+                        title=parsed_data.get(
+                            "head_title", "気象警報・注意報 発表範囲"
+                        ),
+                    ),
                 )
-
                 if image_bytes:
                     embed.set_image(url="attachment://warning_map.png")
 
@@ -288,13 +291,17 @@ class WeatherScheduler:
 
         embed = create_heatstroke_embed(parsed_data)
 
-        image_bytes = create_warning_map_image(
-            area_levels={},
-            heatstroke_area_names=[parsed_data.get("area_name", "")],
-            heatstroke_special=parsed_data.get("is_special", False),
-            title=f"熱中症警戒アラート: {parsed_data.get('area_name', '')}",
+        loop = asyncio.get_running_loop()
+        image_bytes = await loop.run_in_executor(
+            get_map_executor(),
+            functools.partial(
+                create_warning_map_image,
+                area_levels={},
+                heatstroke_area_names=[parsed_data.get("area_name", "")],
+                heatstroke_special=parsed_data.get("is_special", False),
+                title=f"熱中症警戒アラート: {parsed_data.get('area_name', '')}",
+            ),
         )
-
         if image_bytes:
             embed.set_image(url="attachment://heatstroke_map.png")
 
