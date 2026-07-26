@@ -55,7 +55,7 @@ if platform.system() == "Windows":
     font_path = "C:/Windows/Fonts/NotoSansJP-Regular.otf"
     if os.path.exists(font_path):
         fm.fontManager.addfont(font_path)
-        plt.rcParams["font.family"] = "Yu Gothic"
+        plt.rcParams["font.family"] = "Noto Sans CJK JP"
     else:
         logger.warning(f"フォントファイルが見つかりません: {font_path}")
         plt.rcParams["font.family"] = "Meiryo"
