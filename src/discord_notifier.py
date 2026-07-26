@@ -175,3 +175,53 @@ def create_commentary_embed(data: Dict[str, Any]) -> discord.Embed:
     embed.description = desc
     embed.set_footer(text="出典: 気象庁")
     return embed
+
+EARLY_WARNING_COLOR = 0x4A89DC
+
+
+def create_early_warning_embed(data: Dict[str, Any]) -> discord.Embed:
+    head_title = data.get("head_title", "早期注意情報（明後日まで）")
+    info_type = data.get("info_type", "")
+    areas = data.get("areas", [])
+
+    title = head_title
+    if info_type and info_type != "発表":
+        title += f" ({info_type})"
+
+    embed = discord.Embed(
+        title=title,
+        color=EARLY_WARNING_COLOR,
+        timestamp=utcnow(),
+    )
+
+    if info_type == "取消":
+        embed.description = "この早期注意情報は取り消されました。"
+        embed.set_footer(text="出典: 気象庁")
+        return embed
+
+    if not areas:
+        embed.description = "警報級の可能性が「高」または「中」の区域はありません。"
+        embed.set_footer(text="出典: 気象庁")
+        return embed
+
+    lines = []
+    for area in areas:
+        lines.append(f"**{area['name']}**")
+        for kind in area["kinds"]:
+            rank_groups: Dict[str, list] = {}
+            for r in kind["ranks"]:
+                rank_groups.setdefault(r["rank"], []).append(r["time_name"])
+            parts = []
+            for rank in ("高", "中"):
+                if rank in rank_groups:
+                    periods = ", ".join(rank_groups[rank])
+                    parts.append(f"{rank}({periods})")
+            lines.append(f"  {kind['type']}: {' / '.join(parts)}")
+        lines.append("")
+
+    desc = "\n".join(lines)
+    if len(desc) > 4000:
+        desc = desc[:3997] + "..."
+    embed.description = desc
+    embed.set_footer(text="出典: 気象庁")
+    return embed

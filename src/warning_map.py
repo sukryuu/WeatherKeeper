@@ -148,12 +148,6 @@ def _get_feature_code(props: dict) -> str:
     return str(code).strip() if code is not None else ""
 
 
-def _get_feature_pref(props: dict) -> str:
-    regionname = props.get("regionname", "")
-    m = re.match(r"^(.+?[都道府県])", regionname)
-    return m.group(1) if m else ""
-
-
 def _extract_polygons(geometry: dict) -> List[List[Tuple[float, float]]]:
     polygons = []
     geom_type = geometry.get("type")
@@ -168,14 +162,11 @@ def _extract_polygons(geometry: dict) -> List[List[Tuple[float, float]]]:
     return polygons
 
 
-def _match_heatstroke(props: dict, area_names: List[str]) -> bool:
+def _match_heatstroke_pref(props: dict, area_names: List[str]) -> bool:
     regionname = props.get("regionname", "")
-    pref = _get_feature_pref(props)
     for area_name in area_names:
         if not area_name:
             continue
-        if pref and (pref in area_name or area_name in pref):
-            return True
         if regionname and (regionname in area_name or area_name in regionname):
             return True
     return False
@@ -211,12 +202,9 @@ def create_warning_map_image(
             continue
         code = _get_feature_code(props)
         level = area_levels.get(code)
-        color = None
         if level and level in LEVEL_COLORS:
             color = LEVEL_COLORS[level]
-        elif heatstroke_area_names and _match_heatstroke(props, heatstroke_area_names):
-            color = hs_color
-        if color is None:
+        else:
             color = LAND_COLOR
         for poly_coords in polygons:
             patch = MplPolygon(
@@ -229,6 +217,28 @@ def create_warning_map_image(
             )
             ax.add_patch(patch)
             if color != LAND_COLOR:
+                xs, ys = zip(*poly_coords)
+                drawn_x.extend(xs)
+                drawn_y.extend(ys)
+
+    if heatstroke_area_names:
+        for feature in _load_pref_features():
+            props = feature.get("properties", {})
+            geometry = feature.get("geometry", {})
+            if not geometry:
+                continue
+            if not _match_heatstroke_pref(props, heatstroke_area_names):
+                continue
+            for poly_coords in _extract_polygons(geometry):
+                patch = MplPolygon(
+                    poly_coords,
+                    closed=True,
+                    facecolor=hs_color,
+                    edgecolor="none",
+                    linewidth=0,
+                    zorder=1,
+                )
+                ax.add_patch(patch)
                 xs, ys = zip(*poly_coords)
                 drawn_x.extend(xs)
                 drawn_y.extend(ys)

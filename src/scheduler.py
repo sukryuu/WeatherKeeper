@@ -17,11 +17,13 @@ from src.jmaxml_parser import (
     parse_warning_xml,
     parse_heatstroke_xml,
     parse_commentary_xml,
+    parse_early_warning_xml,
 )
 from src.discord_notifier import (
     create_warning_embed,
     create_heatstroke_embed,
     create_commentary_embed,
+    create_early_warning_embed,
 )
 from src.channel_settings import get_all_channels
 from src.warning_map import create_warning_map_image, get_map_executor
@@ -134,10 +136,16 @@ class WeatherScheduler:
 
                 is_warning = "気象警報・注意報（Ｒ０６）" in title
                 is_heatstroke = "熱中症警戒アラート" in title
+                is_early_warning = "早期注意情報" in title
                 is_commentary = (
-                    not is_warning and not is_heatstroke and "気象情報" in title
+                    not is_warning
+                    and not is_heatstroke
+                    and not is_early_warning
+                    and "気象情報" in title
                 )
-                if not (is_warning or is_heatstroke or is_commentary):
+                if not (
+                    is_warning or is_heatstroke or is_early_warning or is_commentary
+                ):
                     continue
 
                 key_source = f"{title}|{entry_updated}" if entry_updated else title
@@ -155,6 +163,10 @@ class WeatherScheduler:
 
                 if is_heatstroke:
                     await self._process_heatstroke(entry_link, unique_key)
+                    continue
+
+                if is_early_warning:
+                    await self._process_early_warning(entry_link, unique_key)
                     continue
 
                 if is_commentary:
@@ -376,3 +388,57 @@ class WeatherScheduler:
 
     def stop(self):
         self.check_warnings.cancel()
+
+
+def make_early_warning_hash(parsed_data: Dict[str, Any]) -> str:
+    parts = [
+        parsed_data.get("head_title", ""),
+        parsed_data.get("target_datetime", ""),
+        parsed_data.get("info_type", ""),
+    ]
+    for area in parsed_data.get("areas", []):
+        for kind in area.get("kinds", []):
+            for r in kind.get("ranks", []):
+                parts.append(
+                    f"{area['name']}:{kind['type']}:{r['time_id']}:{r['rank']}"
+                )
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+    async def _process_early_warning(self, entry_link: str, unique_key: str):
+        xml_content = await asyncio.to_thread(fetch_xml_content, entry_link)
+        if not xml_content:
+            self.processed_events.add(unique_key)
+            return
+
+        parsed_data = parse_early_warning_xml(xml_content)
+        if not parsed_data:
+            self.processed_events.add(unique_key)
+            return
+
+        content_hash = make_early_warning_hash(parsed_data)
+        if content_hash in self.notified_hashes:
+            self.processed_events.add(unique_key)
+            self.save_state()
+            return
+
+        embed = create_early_warning_embed(parsed_data)
+
+        sent_any = False
+        for ch_id in get_all_channels("early_warning"):
+            channel = self.bot.get_channel(ch_id)
+            if not isinstance(channel, TextChannel):
+                logger.warning(f"早期注意情報チャンネルが見つかりません: ID={ch_id}")
+                continue
+            try:
+                await channel.send(embed=embed)
+                sent_any = True
+            except discord.DiscordException as e:
+                logger.error(f"早期注意情報送信失敗: channel={ch_id}, {e}")
+
+        if sent_any:
+            logger.info(f"早期注意情報を送信しました: {parsed_data.get('head_title')}")
+
+        self.processed_events.add(unique_key)
+        self.notified_hashes.add(content_hash)
+        self.save_state()

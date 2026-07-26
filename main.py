@@ -11,11 +11,13 @@ from src.jmaxml_parser import (
     parse_warning_xml,
     parse_heatstroke_xml,
     parse_commentary_xml,
+    parse_early_warning_xml,
 )
 from src.discord_notifier import (
     create_warning_embed,
     create_heatstroke_embed,
     create_commentary_embed,
+    create_early_warning_embed,
 )
 from src.warning_map import create_warning_map_image
 from src.channel_settings import (
@@ -41,6 +43,7 @@ scheduler = None
 SAMPLE_ALERT_FILE = os.path.join(config.DATA_DIR, "sample_alert.xml")
 SAMPLE_HEATSTROKE_FILE = os.path.join(config.DATA_DIR, "sample_heatstroke.xml")
 SAMPLE_COMMENTARY_FILE = os.path.join(config.DATA_DIR, "sample_commentary.xml")
+SAMPLE_EARLY_WARNING_FILE = os.path.join(config.DATA_DIR, "sample_early_warning.xml")
 
 
 async def setup_hook():
@@ -76,6 +79,7 @@ channel_group = app_commands.Group(name="channel", description="通知チャン�
         app_commands.Choice(name="警報・注意報", value="alert"),
         app_commands.Choice(name="熱中症警戒アラート", value="heatstroke"),
         app_commands.Choice(name="気象解説情報", value="commentary"),
+        app_commands.Choice(name="早期注意情報", value="early_warning"),
     ]
 )
 async def channel_set(
@@ -176,6 +180,7 @@ tree.add_command(channel_group)
         app_commands.Choice(name="警報・注意報", value="alert"),
         app_commands.Choice(name="熱中症警戒アラート", value="heatstroke"),
         app_commands.Choice(name="気象解説情報", value="commentary"),
+        app_commands.Choice(name="早期注意情報", value="early_warning"),
     ]
 )
 async def test_alert(
@@ -188,6 +193,8 @@ async def test_alert(
         sample_file = SAMPLE_ALERT_FILE
     elif type.value == "heatstroke":
         sample_file = SAMPLE_HEATSTROKE_FILE
+    elif type.value == "early_warning":
+        sample_file = SAMPLE_EARLY_WARNING_FILE
     else:
         sample_file = SAMPLE_COMMENTARY_FILE
 
@@ -212,6 +219,8 @@ async def test_alert(
         parsed_data = parse_warning_xml(xml_content)
     elif type.value == "heatstroke":
         parsed_data = parse_heatstroke_xml(xml_content)
+    elif type.value == "early_warning":
+        parsed_data = parse_early_warning_xml(xml_content)
     else:
         parsed_data = parse_commentary_xml(xml_content)
 
@@ -271,6 +280,19 @@ async def test_alert(
                 f"対象日: {parsed_data.get('target_label', '---')}\n"
                 f"WBGT予測: {wbgt}\n"
                 f"予想最高気温: {temps}"
+            )
+        elif type.value == "early_warning":
+            embed = create_early_warning_embed(parsed_data)
+            areas = parsed_data.get("areas", [])
+            area_names = [a["name"] for a in areas]
+            kind_types = set()
+            for a in areas:
+                for k in a.get("kinds", []):
+                    kind_types.add(k["type"])
+            summary = (
+                f"タイトル: {parsed_data.get('head_title', '---')}\n"
+                f"対象区域: {', '.join(area_names) if area_names else 'なし'}\n"
+                f"現象: {', '.join(sorted(kind_types)) if kind_types else 'なし'}"
             )
         else:
             embed = create_commentary_embed(parsed_data)

@@ -13,6 +13,7 @@ CHANNEL_TYPES = {
     "alert": "警報・注意報",
     "heatstroke": "熱中症警戒アラート",
     "commentary": "気象解説情報",
+    "early_warning": "早期注意情報",
 }
 
 
@@ -62,10 +63,13 @@ def get_channel_id(guild_id: int, channel_type: str) -> Optional[int]:
     if channel_type in guild_settings:
         return guild_settings[channel_type]
 
-    if channel_type in ("heatstroke", "commentary") and "alert" in guild_settings:
+    if (
+        channel_type in ("heatstroke", "commentary", "early_warning")
+        and "alert" in guild_settings
+    ):
         return guild_settings["alert"]
 
-    if channel_type in ("alert", "heatstroke", "commentary"):
+    if channel_type in ("alert", "heatstroke", "commentary", "early_warning"):
         return config.ALERT_CHANNEL_ID or None
 
     return None
@@ -97,14 +101,14 @@ def get_all_channels(channel_type: str) -> List[int]:
             if ch_id not in seen:
                 seen.add(ch_id)
                 channel_ids.append(ch_id)
-        elif channel_type in ("heatstroke", "commentary"):
+        elif channel_type in ("heatstroke", "commentary", "early_warning"):
             alert_id = types.get("alert")
             if alert_id is not None and alert_id not in seen:
                 seen.add(alert_id)
                 channel_ids.append(alert_id)
 
     if not channel_ids:
-        if channel_type in ("heatstroke", "commentary"):
+        if channel_type in ("heatstroke", "commentary", "early_warning"):
             return get_all_channels("alert")
         if channel_type == "alert" and config.ALERT_CHANNEL_ID:
             channel_ids.append(config.ALERT_CHANNEL_ID)

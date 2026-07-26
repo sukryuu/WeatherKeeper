@@ -532,3 +532,116 @@ def parse_commentary_xml(xml_content: str) -> Optional[Dict[str, Any]]:
         "observations": observations,
         "forecasts": forecasts,
     }
+
+
+def parse_early_warning_xml(xml_content: str) -> Optional[Dict[str, Any]]:
+    xml_content = _ensure_jmx_namespaces(xml_content)
+    try:
+        root = ET.fromstring(xml_content)
+    except ET.ParseError as e:
+        logger.error(f"XMLのパースに失敗しました: {e}")
+        return None
+
+    control_title = _find_text(root, "default:Control/default:Title")
+    if "早期注意情報" not in control_title:
+        logger.debug(f"早期注意情報ではないためスキップ: {control_title}")
+        return None
+
+    head = root.find(f"{{{NS_INFO}}}Head")
+    if head is None:
+        head = root.find(f"{{{NS_JMXML}}}Head")
+
+    head_title = _find_text(head, "info:Title")
+    info_type = _find_text(head, "info:InfoType")
+    target_dt = _find_text(head, "info:TargetDateTime")
+
+    body = root.find(f"{{{NS_BODY}}}Body")
+    if body is None:
+        body = root.find(f"{{{NS_JMXML}}}Body")
+
+    time_names: Dict[str, str] = {}
+    areas_data: list = []
+
+    if body is not None:
+        for infos in body:
+            if not infos.tag.endswith("MeteorologicalInfos"):
+                continue
+            if infos.attrib.get("type") != "区域予報":
+                continue
+            for tsi in infos:
+                if not tsi.tag.endswith("TimeSeriesInfo"):
+                    continue
+                for child in tsi:
+                    if child.tag.endswith("TimeDefines"):
+                        for td in child:
+                            if td.tag.endswith("TimeDefine"):
+                                tid = td.attrib.get("timeId", "")
+                                nm = _child_text(td, "Name")
+                                if tid and nm:
+                                    time_names[tid] = nm
+                    elif child.tag.endswith("Item"):
+                        area_name = ""
+                        area_code = ""
+                        kinds: list = []
+                        for sub in child:
+                            if sub.tag.endswith("Area"):
+                                area_name = _child_text(sub, "Name")
+                                area_code = _child_text(sub, "Code")
+                            elif sub.tag.endswith("Kind"):
+                                for prop in sub:
+                                    if not prop.tag.endswith("Property"):
+                                        continue
+                                    kind_type = _child_text(prop, "Type")
+                                    if not kind_type:
+                                        continue
+                                    ranks = []
+                                    for part in prop:
+                                        if not part.tag.endswith(
+                                            "PossibilityRankOfWarningPart"
+                                        ):
+                                            continue
+                                        for rw in part:
+                                            if not rw.tag.endswith(
+                                                "PossibilityRankOfWarning"
+                                            ):
+                                                continue
+                                            rid = rw.attrib.get("refID", "")
+                                            rank = (
+                                                rw.text.strip()
+                                                if rw.text
+                                                else ""
+                                            )
+                                            if rank in ("高", "中"):
+                                                ranks.append(
+                                                    {
+                                                        "time_id": rid,
+                                                        "time_name": time_names.get(
+                                                            rid, rid
+                                                        ),
+                                                        "rank": rank,
+                                                    }
+                                                )
+                                    if ranks:
+                                        kinds.append(
+                                            {"type": kind_type, "ranks": ranks}
+                                        )
+                        if area_name and kinds:
+                            areas_data.append(
+                                {
+                                    "name": area_name,
+                                    "code": area_code,
+                                    "kinds": kinds,
+                                }
+                            )
+
+    if info_type == "取消":
+        areas_data = []
+
+    return {
+        "head_title": head_title,
+        "control_title": control_title,
+        "info_type": info_type,
+        "target_datetime": target_dt,
+        "time_names": time_names,
+        "areas": areas_data,
+    }
