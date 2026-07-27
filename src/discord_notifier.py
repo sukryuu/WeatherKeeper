@@ -225,3 +225,132 @@ def create_early_warning_embed(data: Dict[str, Any]) -> discord.Embed:
     embed.description = desc
     embed.set_footer(text="出典: 気象庁")
     return embed
+
+
+RECORD_RAIN_COLOR = 0xB40000
+
+
+def create_record_rain_embed(data: Dict[str, Any]) -> discord.Embed:
+    head_title = data.get("head_title", "記録的短時間大雨情報")
+    info_type = data.get("info_type", "")
+    serial = data.get("serial", "")
+    headline_text = data.get("headline_text", "")
+
+    title = head_title
+    if serial:
+        title += f" (第{serial}報)"
+
+    embed = discord.Embed(
+        title=title,
+        color=RECORD_RAIN_COLOR,
+        timestamp=utcnow(),
+    )
+
+    lines = []
+    if headline_text:
+        lines.append(headline_text)
+    if info_type and info_type != "発表":
+        lines.append("")
+        lines.append(f"情報種別: {info_type}")
+
+    embed.description = "\n".join(lines) if lines else "詳細情報はありません。"
+    embed.set_footer(text="出典: 気象庁")
+    return embed
+
+
+FLOOD_COLORS = {
+    5: 0x000000,
+    4: 0x7A008A,
+    3: 0xB40000,
+    2: 0xDBAF00,
+    1: 0x4A89DC,
+}
+
+
+def create_flood_forecast_embed(data: Dict[str, Any]) -> discord.Embed:
+    head_title = data.get("head_title", "指定河川洪水予報")
+    info_type = data.get("info_type", "")
+    serial = data.get("serial", "")
+    headline_text = data.get("headline_text", "")
+    level = data.get("level", 0)
+    main_texts = data.get("main_texts", [])
+    affected_cities = data.get("affected_cities", [])
+    rainfall_text = data.get("rainfall_text", "")
+    rainfall_series = data.get("rainfall_series", [])
+    water_stations = data.get("water_stations", [])
+
+    title = head_title
+    if serial:
+        title += f" (第{serial}報)"
+
+    color = FLOOD_COLORS.get(level, 0x4A89DC)
+
+    embed = discord.Embed(
+        title=title,
+        color=color,
+        timestamp=utcnow(),
+    )
+
+    lines = []
+
+    if headline_text:
+        lines.append(headline_text)
+        lines.append("")
+
+    if main_texts:
+        lines.append("**[概要]**")
+        for mt in main_texts:
+            header = mt["station"]
+            if mt["location"]:
+                header += f"({mt['location']})"
+            lines.append(f"{header}")
+            lines.append(mt["text"])
+            lines.append("")
+
+    if affected_cities:
+        lines.append(f"浸水想定地域: {', '.join(affected_cities)}")
+        lines.append("")
+
+    if rainfall_text or rainfall_series:
+        lines.append("**[雨量情報]**")
+        if rainfall_text:
+            lines.append(rainfall_text)
+        if rainfall_series:
+            lines.append("")
+            lines.append("流域平均雨量:")
+            for rs in rainfall_series:
+                lines.append(f"  {rs['label']}: {rs['value']}{rs['unit']}")
+        lines.append("")
+
+    if water_stations:
+        lines.append("**[水位・流量情報]**")
+        for ws in water_stations:
+            header = ws["station"]
+            if ws["location"]:
+                header += f"({ws['location']})"
+            lines.append(header)
+
+            has_discharge = any(s.get("discharge") for s in ws["series"])
+
+            for s in ws["series"]:
+                parts = [s["label"]]
+                if s.get("level_m"):
+                    unit = s.get("unit", "m")
+                    parts.append(f"{s['level_m']}{unit}")
+                if s.get("level_rank"):
+                    parts.append(f"Lv{s['level_rank']}")
+                if has_discharge and s.get("discharge"):
+                    d_unit = s.get("discharge_unit", "m3/s")
+                    parts.append(f"{s['discharge']}{d_unit}")
+                lines.append("  " + " / ".join(parts))
+            lines.append("")
+
+    if info_type and info_type != "発表":
+        lines.append(f"情報種別: {info_type}")
+
+    desc = "\n".join(lines)
+    if len(desc) > 4000:
+        desc = desc[:3997] + "..."
+    embed.description = desc
+    embed.set_footer(text="出典: 気象庁・河川管理者")
+    return embed

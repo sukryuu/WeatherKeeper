@@ -12,12 +12,16 @@ from src.jmaxml_parser import (
     parse_heatstroke_xml,
     parse_commentary_xml,
     parse_early_warning_xml,
+    parse_record_rain_xml,
+    parse_flood_forecast_xml,
 )
 from src.discord_notifier import (
     create_warning_embed,
     create_heatstroke_embed,
     create_commentary_embed,
     create_early_warning_embed,
+    create_record_rain_embed,
+    create_flood_forecast_embed,
 )
 from src.warning_map import create_warning_map_image
 from src.channel_settings import (
@@ -44,6 +48,8 @@ SAMPLE_ALERT_FILE = os.path.join(config.DATA_DIR, "sample_alert.xml")
 SAMPLE_HEATSTROKE_FILE = os.path.join(config.DATA_DIR, "sample_heatstroke.xml")
 SAMPLE_COMMENTARY_FILE = os.path.join(config.DATA_DIR, "sample_commentary.xml")
 SAMPLE_EARLY_WARNING_FILE = os.path.join(config.DATA_DIR, "sample_early_warning.xml")
+SAMPLE_RECORD_RAIN_FILE = os.path.join(config.DATA_DIR, "sample_record_rain.xml")
+SAMPLE_FLOOD_FILE = os.path.join(config.DATA_DIR, "sample_flood.xml")
 
 
 async def setup_hook():
@@ -80,6 +86,8 @@ channel_group = app_commands.Group(name="channel", description="通知チャン�
         app_commands.Choice(name="熱中症警戒アラート", value="heatstroke"),
         app_commands.Choice(name="気象解説情報", value="commentary"),
         app_commands.Choice(name="早期注意情報", value="early_warning"),
+        app_commands.Choice(name="記録的短時間大雨情報", value="record_rain"),
+        app_commands.Choice(name="指定河川洪水予報", value="flood"),
     ]
 )
 async def channel_set(
@@ -181,6 +189,8 @@ tree.add_command(channel_group)
         app_commands.Choice(name="熱中症警戒アラート", value="heatstroke"),
         app_commands.Choice(name="気象解説情報", value="commentary"),
         app_commands.Choice(name="早期注意情報", value="early_warning"),
+        app_commands.Choice(name="記録的短時間大雨情報", value="record_rain"),
+        app_commands.Choice(name="指定河川洪水予報", value="flood"),
     ]
 )
 async def test_alert(
@@ -195,6 +205,10 @@ async def test_alert(
         sample_file = SAMPLE_HEATSTROKE_FILE
     elif type.value == "early_warning":
         sample_file = SAMPLE_EARLY_WARNING_FILE
+    elif type.value == "record_rain":
+        sample_file = SAMPLE_RECORD_RAIN_FILE
+    elif type.value == "flood":
+        sample_file = SAMPLE_FLOOD_FILE
     else:
         sample_file = SAMPLE_COMMENTARY_FILE
 
@@ -221,6 +235,10 @@ async def test_alert(
         parsed_data = parse_heatstroke_xml(xml_content)
     elif type.value == "early_warning":
         parsed_data = parse_early_warning_xml(xml_content)
+    elif type.value == "record_rain":
+        parsed_data = parse_record_rain_xml(xml_content)
+    elif type.value == "flood":
+        parsed_data = parse_flood_forecast_xml(xml_content)
     else:
         parsed_data = parse_commentary_xml(xml_content)
 
@@ -293,6 +311,21 @@ async def test_alert(
                 f"タイトル: {parsed_data.get('head_title', '---')}\n"
                 f"対象区域: {', '.join(area_names) if area_names else 'なし'}\n"
                 f"現象: {', '.join(sorted(kind_types)) if kind_types else 'なし'}"
+            )
+        elif type.value == "record_rain":
+            embed = create_record_rain_embed(parsed_data)
+            summary = (
+                f"タイトル: {parsed_data.get('head_title', '---')}\n"
+                f"区域: {parsed_data.get('area_name', '---')}\n"
+                f"第{parsed_data.get('serial', '?')}報"
+            )
+        elif type.value == "flood":
+            embed = create_flood_forecast_embed(parsed_data)
+            summary = (
+                f"タイトル: {parsed_data.get('head_title', '---')}\n"
+                f"河川: {parsed_data.get('river_area_name', '---')}\n"
+                f"レベル: {parsed_data.get('level', '?')}\n"
+                f"第{parsed_data.get('serial', '?')}報"
             )
         else:
             embed = create_commentary_embed(parsed_data)

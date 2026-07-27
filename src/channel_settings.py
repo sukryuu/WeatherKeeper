@@ -14,6 +14,8 @@ CHANNEL_TYPES = {
     "heatstroke": "熱中症警戒アラート",
     "commentary": "気象解説情報",
     "early_warning": "早期注意情報",
+    "record_rain": "記録的短時間大雨情報",
+    "flood": "指定河川洪水予報",
 }
 
 

@@ -287,7 +287,7 @@ def parse_heatstroke_xml(xml_content: str) -> Optional[Dict[str, Any]]:
     info_type = _find_text(head, "info:InfoType")
     target_dt = _find_text(head, "info:TargetDateTime")
 
-    area_name = head_title.replace("熱中症警戒アラート", "").strip()
+    area_name = head_title.replace("熱中症特別警戒アラート", "").replace("熱中症警戒アラート", "").strip()
 
     body = root.find("Body")
     if body is None:
@@ -644,4 +644,329 @@ def parse_early_warning_xml(xml_content: str) -> Optional[Dict[str, Any]]:
         "target_datetime": target_dt,
         "time_names": time_names,
         "areas": areas_data,
+    }
+
+
+def parse_record_rain_xml(xml_content: str) -> Optional[Dict[str, Any]]:
+    xml_content = _ensure_jmx_namespaces(xml_content)
+    try:
+        root = ET.fromstring(xml_content)
+    except ET.ParseError as e:
+        logger.error(f"XMLのパースに失敗しました: {e}")
+        return None
+
+    control_title = _find_text(root, "default:Control/default:Title")
+    if "記録的短時間大雨情報" not in control_title:
+        logger.debug(f"記録的短時間大雨情報ではないためスキップ: {control_title}")
+        return None
+
+    head = root.find(f"{{{NS_INFO}}}Head")
+    if head is None:
+        head = root.find(f"{{{NS_JMXML}}}Head")
+
+    head_title = _find_text(head, "info:Title")
+    info_type = _find_text(head, "info:InfoType")
+    target_dt = _find_text(head, "info:TargetDateTime")
+    serial = _find_text(head, "info:Serial")
+
+    headline_text = ""
+    headline = root.find(f".//{{{NS_INFO}}}Headline")
+    if headline is None:
+        headline = root.find(f".//{{{NS_JMXML}}}Headline")
+    if headline is not None:
+        text_elem = headline.find(f"{{{NS_INFO}}}Text")
+        if text_elem is None:
+            text_elem = headline.find(f"{{{NS_JMXML}}}Text")
+        if text_elem is not None and text_elem.text:
+            headline_text = text_elem.text.strip()
+
+    area_name = ""
+    area_code = ""
+    body = root.find(f"{{{NS_BODY}}}Body")
+    if body is None:
+        body = root.find(f"{{{NS_JMXML}}}Body")
+    if body is not None:
+        for warning in body:
+            if not warning.tag.endswith("Warning"):
+                continue
+            for item in warning:
+                if not item.tag.endswith("Item"):
+                    continue
+                for child in item:
+                    if child.tag.endswith("Area"):
+                        area_name = _child_text(child, "Name")
+                        area_code = _child_text(child, "Code")
+
+    return {
+        "head_title": head_title,
+        "control_title": control_title,
+        "info_type": info_type,
+        "target_datetime": target_dt,
+        "serial": serial,
+        "headline_text": headline_text,
+        "area_name": area_name,
+        "area_code": area_code,
+    }
+
+
+FLOOD_LEVEL_MAP = {
+    "５": 5,
+    "４": 4,
+    "３": 3,
+    "２": 2,
+    "１": 1,
+}
+
+
+def parse_flood_forecast_xml(xml_content: str) -> Optional[Dict[str, Any]]:
+    xml_content = _ensure_jmx_namespaces(xml_content)
+    try:
+        root = ET.fromstring(xml_content)
+    except ET.ParseError as e:
+        logger.error(f"XMLのパースに失敗しました: {e}")
+        return None
+
+    control_title = _find_text(root, "default:Control/default:Title")
+    if "指定河川洪水予報" not in control_title:
+        logger.debug(f"指定河川洪水予報ではないためスキップ: {control_title}")
+        return None
+
+    head = root.find(f"{{{NS_INFO}}}Head")
+    if head is None:
+        head = root.find(f"{{{NS_JMXML}}}Head")
+
+    head_title = _find_text(head, "info:Title")
+    info_type = _find_text(head, "info:InfoType")
+    target_dt = _find_text(head, "info:TargetDateTime")
+    serial = _find_text(head, "info:Serial")
+
+    headline_text = ""
+    kind_name = ""
+    river_area_name = ""
+    pref_names: list = []
+
+    headline = root.find(f".//{{{NS_INFO}}}Headline")
+    if headline is None:
+        headline = root.find(f".//{{{NS_JMXML}}}Headline")
+    if headline is not None:
+        text_elem = headline.find(f"{{{NS_INFO}}}Text")
+        if text_elem is None:
+            text_elem = headline.find(f"{{{NS_JMXML}}}Text")
+        if text_elem is not None and text_elem.text:
+            headline_text = text_elem.text.strip()
+
+        for info in headline:
+            if not info.tag.endswith("Information"):
+                continue
+            info_type_attr = info.attrib.get("type", "")
+            for item in info:
+                if not item.tag.endswith("Item"):
+                    continue
+                for child in item:
+                    if child.tag.endswith("Kind"):
+                        nm = _child_text(child, "Name")
+                        if nm and not kind_name:
+                            kind_name = nm
+                    elif child.tag.endswith("Areas"):
+                        if "予報区域" in info_type_attr:
+                            for area in child:
+                                if area.tag.endswith("Area"):
+                                    nm = _child_text(area, "Name")
+                                    if nm and not river_area_name:
+                                        river_area_name = nm
+                        elif "府県予報区" in info_type_attr:
+                            for area in child:
+                                if area.tag.endswith("Area"):
+                                    nm = _child_text(area, "Name")
+                                    if nm and nm not in pref_names:
+                                        pref_names.append(nm)
+
+    level = 0
+    for fw_digit, lv in FLOOD_LEVEL_MAP.items():
+        if f"レベル{fw_digit}" in kind_name or f"レベル{fw_digit}" in head_title:
+            level = lv
+            break
+
+    body = root.find(f"{{{NS_BODY}}}Body")
+    if body is None:
+        body = root.find(f"{{{NS_JMXML}}}Body")
+
+    main_texts: list = []
+    affected_cities: list = []
+    rainfall_text = ""
+    rainfall_series: list = []
+    water_stations: list = []
+
+    if body is not None:
+        for warning in body:
+            if not warning.tag.endswith("Warning"):
+                continue
+            for item in warning:
+                if not item.tag.endswith("Item"):
+                    continue
+                item_text = ""
+                station_name = ""
+                station_location = ""
+                for child in item:
+                    if child.tag.endswith("Kind"):
+                        for prop in child:
+                            if prop.tag.endswith("Property"):
+                                ptype = _child_text(prop, "Type")
+                                if ptype == "主文":
+                                    for t in prop:
+                                        if t.tag.endswith("Text") and t.text:
+                                            item_text = t.text.strip()
+                    elif child.tag.endswith("Stations"):
+                        for st in child:
+                            if st.tag.endswith("Station"):
+                                station_name = _child_text(st, "Name")
+                                station_location = _child_text(st, "Location")
+                    elif child.tag.endswith("Areas"):
+                        for area in child:
+                            if not area.tag.endswith("Area"):
+                                continue
+                            city = _child_text(area, "City")
+                            pref = _child_text(area, "Prefecture")
+                            if city:
+                                label = f"{pref}{city}" if pref else city
+                                if label not in affected_cities:
+                                    affected_cities.append(label)
+                if item_text:
+                    main_texts.append(
+                        {
+                            "station": station_name,
+                            "location": station_location,
+                            "text": item_text,
+                        }
+                    )
+
+        for infos in body:
+            if not infos.tag.endswith("MeteorologicalInfos"):
+                continue
+            infos_type = infos.attrib.get("type", "")
+
+            if infos_type == "雨量情報":
+                for child in infos:
+                    if child.tag.endswith("MeteorologicalInfo"):
+                        for item in child:
+                            if not item.tag.endswith("Item"):
+                                continue
+                            for kind in item:
+                                if not kind.tag.endswith("Kind"):
+                                    continue
+                                for prop in kind:
+                                    if prop.tag.endswith("Property"):
+                                        for t in prop:
+                                            if t.tag.endswith("Text") and t.text:
+                                                rainfall_text = t.text.strip()
+
+                    elif child.tag.endswith("TimeSeriesInfo"):
+                        time_names: Dict[str, str] = {}
+                        for tsi_child in child:
+                            if tsi_child.tag.endswith("TimeDefines"):
+                                for td in tsi_child:
+                                    if td.tag.endswith("TimeDefine"):
+                                        tid = td.attrib.get("timeId", "")
+                                        nm = _child_text(td, "Name")
+                                        if tid and nm:
+                                            time_names[tid] = nm
+                            elif tsi_child.tag.endswith("Item"):
+                                area_name = ""
+                                for sub in _descendants(tsi_child):
+                                    if sub.tag.endswith("Area"):
+                                        area_name = _child_text(sub, "Name")
+                                    elif sub.tag.endswith("Precipitation"):
+                                        rid = sub.attrib.get("refID", "")
+                                        unit = sub.attrib.get("unit", "")
+                                        val = (
+                                            sub.text.strip()
+                                            if sub.text
+                                            else ""
+                                        )
+                                        if rid and val:
+                                            rainfall_series.append(
+                                                {
+                                                    "label": time_names.get(rid, rid),
+                                                    "value": val,
+                                                    "unit": unit,
+                                                    "area": area_name,
+                                                }
+                                            )
+
+            elif infos_type == "水位・流量情報":
+                for child in infos:
+                    if not child.tag.endswith("TimeSeriesInfo"):
+                        continue
+                    time_names = {}
+                    for tsi_child in child:
+                        if tsi_child.tag.endswith("TimeDefines"):
+                            for td in tsi_child:
+                                if td.tag.endswith("TimeDefine"):
+                                    tid = td.attrib.get("timeId", "")
+                                    nm = _child_text(td, "Name")
+                                    if tid and nm:
+                                        time_names[tid] = nm
+                        elif tsi_child.tag.endswith("Item"):
+                            st_name = ""
+                            st_location = ""
+                            for sub in tsi_child:
+                                if sub.tag.endswith("Station"):
+                                    st_name = _child_text(sub, "Name")
+                                    st_location = _child_text(sub, "Location")
+                            series: list = []
+                            for sub in _descendants(tsi_child):
+                                if not sub.tag.endswith("WaterLevel"):
+                                    continue
+                                rid = sub.attrib.get("refID", "")
+                                wl_type = sub.attrib.get("type", "")
+                                unit = sub.attrib.get("unit", "")
+                                val = sub.text.strip() if sub.text else ""
+                                if not rid or not val:
+                                    continue
+                                existing = next(
+                                    (s for s in series if s["time_id"] == rid),
+                                    None,
+                                )
+                                if existing is None:
+                                    existing = {
+                                        "time_id": rid,
+                                        "label": time_names.get(rid, rid),
+                                        "level_m": "",
+                                        "level_rank": "",
+                                        "discharge": "",
+                                    }
+                                    series.append(existing)
+                                if wl_type == "水位":
+                                    existing["level_m"] = val
+                                    existing["unit"] = unit
+                                elif wl_type == "レベル":
+                                    existing["level_rank"] = val
+                                elif wl_type == "流量":
+                                    existing["discharge"] = val
+                                    existing["discharge_unit"] = unit
+                            if st_name and series:
+                                water_stations.append(
+                                    {
+                                        "station": st_name,
+                                        "location": st_location,
+                                        "series": series,
+                                    }
+                                )
+
+    return {
+        "head_title": head_title,
+        "control_title": control_title,
+        "info_type": info_type,
+        "target_datetime": target_dt,
+        "serial": serial,
+        "headline_text": headline_text,
+        "kind_name": kind_name,
+        "level": level,
+        "river_area_name": river_area_name,
+        "pref_names": pref_names,
+        "main_texts": main_texts,
+        "affected_cities": affected_cities,
+        "rainfall_text": rainfall_text,
+        "rainfall_series": rainfall_series,
+        "water_stations": water_stations,
     }

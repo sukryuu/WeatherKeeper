@@ -18,12 +18,16 @@ from src.jmaxml_parser import (
     parse_heatstroke_xml,
     parse_commentary_xml,
     parse_early_warning_xml,
+    parse_record_rain_xml,
+    parse_flood_forecast_xml,
 )
 from src.discord_notifier import (
     create_warning_embed,
     create_heatstroke_embed,
     create_commentary_embed,
     create_early_warning_embed,
+    create_record_rain_embed,
+    create_flood_forecast_embed,
 )
 from src.channel_settings import get_all_channels
 from src.warning_map import create_warning_map_image, get_map_executor
@@ -66,6 +70,50 @@ def make_commentary_hash(parsed_data: Dict[str, Any]) -> str:
         parsed_data.get("disaster_matters", ""),
         parsed_data.get("comment_text", ""),
     ]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def make_early_warning_hash(parsed_data: Dict[str, Any]) -> str:
+    parts = [
+        parsed_data.get("head_title", ""),
+        parsed_data.get("target_datetime", ""),
+        parsed_data.get("info_type", ""),
+    ]
+    for area in parsed_data.get("areas", []):
+        for kind in area.get("kinds", []):
+            for r in kind.get("ranks", []):
+                parts.append(
+                    f"{area['name']}:{kind['type']}:{r['time_id']}:{r['rank']}"
+                )
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def make_record_rain_hash(parsed_data: Dict[str, Any]) -> str:
+    parts = [
+        parsed_data.get("head_title", ""),
+        parsed_data.get("target_datetime", ""),
+        parsed_data.get("info_type", ""),
+        parsed_data.get("serial", ""),
+        parsed_data.get("headline_text", ""),
+    ]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def make_flood_forecast_hash(parsed_data: Dict[str, Any]) -> str:
+    parts = [
+        parsed_data.get("head_title", ""),
+        parsed_data.get("target_datetime", ""),
+        parsed_data.get("info_type", ""),
+        parsed_data.get("serial", ""),
+        parsed_data.get("headline_text", ""),
+    ]
+    for mt in parsed_data.get("main_texts", []):
+        parts.append(f"{mt.get('station', '')}:{mt.get('text', '')}")
+    for ws in parsed_data.get("water_stations", []):
+        for s in ws.get("series", []):
+            parts.append(
+                f"{ws['station']}:{s['time_id']}:{s.get('level_m', '')}:{s.get('level_rank', '')}"
+            )
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 
@@ -137,14 +185,23 @@ class WeatherScheduler:
                 is_warning = "気象警報・注意報（Ｒ０６）" in title
                 is_heatstroke = "熱中症警戒アラート" in title
                 is_early_warning = "早期注意情報" in title
+                is_record_rain = "記録的短時間大雨情報" in title
+                is_flood = "指定河川洪水予報" in title
                 is_commentary = (
                     not is_warning
                     and not is_heatstroke
                     and not is_early_warning
+                    and not is_record_rain
+                    and not is_flood
                     and "気象情報" in title
                 )
                 if not (
-                    is_warning or is_heatstroke or is_early_warning or is_commentary
+                    is_warning
+                    or is_heatstroke
+                    or is_early_warning
+                    or is_record_rain
+                    or is_flood
+                    or is_commentary
                 ):
                     continue
 
@@ -167,6 +224,14 @@ class WeatherScheduler:
 
                 if is_early_warning:
                     await self._process_early_warning(entry_link, unique_key)
+                    continue
+
+                if is_record_rain:
+                    await self._process_record_rain(entry_link, unique_key)
+                    continue
+
+                if is_flood:
+                    await self._process_flood_forecast(entry_link, unique_key)
                     continue
 
                 if is_commentary:
@@ -344,6 +409,124 @@ class WeatherScheduler:
         self.notified_hashes.add(content_hash)
         self.save_state()
 
+    async def _process_early_warning(self, entry_link: str, unique_key: str):
+        xml_content = await asyncio.to_thread(fetch_xml_content, entry_link)
+        if not xml_content:
+            self.processed_events.add(unique_key)
+            return
+
+        parsed_data = parse_early_warning_xml(xml_content)
+        if not parsed_data:
+            self.processed_events.add(unique_key)
+            return
+
+        content_hash = make_early_warning_hash(parsed_data)
+        if content_hash in self.notified_hashes:
+            self.processed_events.add(unique_key)
+            self.save_state()
+            return
+
+        embed = create_early_warning_embed(parsed_data)
+
+        sent_any = False
+        for ch_id in get_all_channels("early_warning"):
+            channel = self.bot.get_channel(ch_id)
+            if not isinstance(channel, TextChannel):
+                logger.warning(f"早期注意情報チャンネルが見つかりません: ID={ch_id}")
+                continue
+            try:
+                await channel.send(embed=embed)
+                sent_any = True
+            except discord.DiscordException as e:
+                logger.error(f"早期注意情報送信失敗: channel={ch_id}, {e}")
+
+        if sent_any:
+            logger.info(f"早期注意情報を送信しました: {parsed_data.get('head_title')}")
+
+        self.processed_events.add(unique_key)
+        self.notified_hashes.add(content_hash)
+        self.save_state()
+
+    async def _process_record_rain(self, entry_link: str, unique_key: str):
+        xml_content = await asyncio.to_thread(fetch_xml_content, entry_link)
+        if not xml_content:
+            self.processed_events.add(unique_key)
+            return
+
+        parsed_data = parse_record_rain_xml(xml_content)
+        if not parsed_data:
+            self.processed_events.add(unique_key)
+            return
+
+        content_hash = make_record_rain_hash(parsed_data)
+        if content_hash in self.notified_hashes:
+            self.processed_events.add(unique_key)
+            self.save_state()
+            return
+
+        embed = create_record_rain_embed(parsed_data)
+
+        sent_any = False
+        for ch_id in get_all_channels("alert"):
+            channel = self.bot.get_channel(ch_id)
+            if not isinstance(channel, TextChannel):
+                logger.warning(f"警報チャンネルが見つかりません: ID={ch_id}")
+                continue
+            try:
+                await channel.send(embed=embed)
+                sent_any = True
+            except discord.DiscordException as e:
+                logger.error(f"記録的短時間大雨情報送信失敗: channel={ch_id}, {e}")
+
+        if sent_any:
+            logger.info(
+                f"記録的短時間大雨情報を送信しました: {parsed_data.get('head_title')}"
+            )
+
+        self.processed_events.add(unique_key)
+        self.notified_hashes.add(content_hash)
+        self.save_state()
+
+    async def _process_flood_forecast(self, entry_link: str, unique_key: str):
+        xml_content = await asyncio.to_thread(fetch_xml_content, entry_link)
+        if not xml_content:
+            self.processed_events.add(unique_key)
+            return
+
+        parsed_data = parse_flood_forecast_xml(xml_content)
+        if not parsed_data:
+            self.processed_events.add(unique_key)
+            return
+
+        content_hash = make_flood_forecast_hash(parsed_data)
+        if content_hash in self.notified_hashes:
+            self.processed_events.add(unique_key)
+            self.save_state()
+            return
+
+        embed = create_flood_forecast_embed(parsed_data)
+
+        sent_any = False
+        for ch_id in get_all_channels("alert"):
+            channel = self.bot.get_channel(ch_id)
+            if not isinstance(channel, TextChannel):
+                logger.warning(f"警報チャンネルが見つかりません: ID={ch_id}")
+                continue
+            try:
+                await channel.send(embed=embed)
+                sent_any = True
+            except discord.DiscordException as e:
+                logger.error(f"指定河川洪水予報送信失敗: channel={ch_id}, {e}")
+
+        if sent_any:
+            logger.info(
+                f"指定河川洪水予報を送信しました: {parsed_data.get('head_title')}"
+            )
+
+        self.processed_events.add(unique_key)
+        self.notified_hashes.add(content_hash)
+        self.save_state()
+
     async def _process_commentary(self, entry_link: str, unique_key: str):
         xml_content = await asyncio.to_thread(fetch_xml_content, entry_link)
         if not xml_content:
@@ -388,57 +571,3 @@ class WeatherScheduler:
 
     def stop(self):
         self.check_warnings.cancel()
-
-
-def make_early_warning_hash(parsed_data: Dict[str, Any]) -> str:
-    parts = [
-        parsed_data.get("head_title", ""),
-        parsed_data.get("target_datetime", ""),
-        parsed_data.get("info_type", ""),
-    ]
-    for area in parsed_data.get("areas", []):
-        for kind in area.get("kinds", []):
-            for r in kind.get("ranks", []):
-                parts.append(
-                    f"{area['name']}:{kind['type']}:{r['time_id']}:{r['rank']}"
-                )
-    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
-
-
-    async def _process_early_warning(self, entry_link: str, unique_key: str):
-        xml_content = await asyncio.to_thread(fetch_xml_content, entry_link)
-        if not xml_content:
-            self.processed_events.add(unique_key)
-            return
-
-        parsed_data = parse_early_warning_xml(xml_content)
-        if not parsed_data:
-            self.processed_events.add(unique_key)
-            return
-
-        content_hash = make_early_warning_hash(parsed_data)
-        if content_hash in self.notified_hashes:
-            self.processed_events.add(unique_key)
-            self.save_state()
-            return
-
-        embed = create_early_warning_embed(parsed_data)
-
-        sent_any = False
-        for ch_id in get_all_channels("early_warning"):
-            channel = self.bot.get_channel(ch_id)
-            if not isinstance(channel, TextChannel):
-                logger.warning(f"早期注意情報チャンネルが見つかりません: ID={ch_id}")
-                continue
-            try:
-                await channel.send(embed=embed)
-                sent_any = True
-            except discord.DiscordException as e:
-                logger.error(f"早期注意情報送信失敗: channel={ch_id}, {e}")
-
-        if sent_any:
-            logger.info(f"早期注意情報を送信しました: {parsed_data.get('head_title')}")
-
-        self.processed_events.add(unique_key)
-        self.notified_hashes.add(content_hash)
-        self.save_state()

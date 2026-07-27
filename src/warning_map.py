@@ -167,8 +167,28 @@ def _match_heatstroke_pref(props: dict, area_names: List[str]) -> bool:
     for area_name in area_names:
         if not area_name:
             continue
-        if regionname and (regionname in area_name or area_name in regionname):
+        matched = False
+        m = re.search(r"^(.+?)[（(](.+?)[）)]$", area_name)
+        if m:
+            base_area = m.group(1)
+            sub_area = m.group(2)
+            if (
+                regionname == sub_area
+                or regionname == base_area
+                or regionname == f"{base_area}（{sub_area}）"
+            ):
+                matched = True
+        else:
+            pref_name = re.sub(r"[都道府県]$", "", area_name)
+            if pref_name in regionname or regionname in area_name:
+                matched = True
+
+        if matched:
+            logger.info(
+                f"[MATCH] area_name={area_name} matched regionname={regionname}"
+            )
             return True
+
     return False
 
 
@@ -178,6 +198,9 @@ def create_warning_map_image(
     heatstroke_special: bool = False,
     title: str = "気象警報・注意報 発表範囲",
 ) -> Optional[bytes]:
+
+    logger.info(f"[DEBUG] heatstroke_area_names: {heatstroke_area_names}")
+
     features = _load_city_features()
     if not features:
         return None
@@ -192,6 +215,7 @@ def create_warning_map_image(
 
     hs_color = HEATSTROKE_COLORS["special" if heatstroke_special else "alert"]
 
+    # 1. 市町村の描画（警報レベルのみ。ここでは熱中症は処理しない）
     for feature in features:
         props = feature.get("properties", {})
         geometry = feature.get("geometry", {})
@@ -221,6 +245,7 @@ def create_warning_map_image(
                 drawn_x.extend(xs)
                 drawn_y.extend(ys)
 
+    # 2. 熱中症警戒アラートの描画（府県・細分区域単位）
     if heatstroke_area_names:
         for feature in _load_pref_features():
             props = feature.get("properties", {})
@@ -243,6 +268,7 @@ def create_warning_map_image(
                 drawn_x.extend(xs)
                 drawn_y.extend(ys)
 
+    # 3. 都道府県境界線の描画
     for feature in _load_pref_features():
         geometry = feature.get("geometry", {})
         if not geometry:
