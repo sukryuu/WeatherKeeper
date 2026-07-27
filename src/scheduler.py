@@ -20,6 +20,8 @@ from src.jmaxml_parser import (
     parse_early_warning_xml,
     parse_record_rain_xml,
     parse_flood_forecast_xml,
+    parse_volcano_eruption_xml,
+    parse_volcano_observation_xml,
 )
 from src.discord_notifier import (
     create_warning_embed,
@@ -28,6 +30,8 @@ from src.discord_notifier import (
     create_early_warning_embed,
     create_record_rain_embed,
     create_flood_forecast_embed,
+    create_volcano_eruption_embed,
+    create_volcano_observation_embed,
 )
 from src.channel_settings import get_all_channels
 from src.warning_map import create_warning_map_image, get_map_executor
@@ -117,6 +121,24 @@ def make_flood_forecast_hash(parsed_data: Dict[str, Any]) -> str:
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
 
 
+def make_volcano_eruption_hash(parsed_data: Dict[str, Any]) -> str:
+    parts = [
+        parsed_data.get("head_title", ""),
+        parsed_data.get("target_datetime", ""),
+        parsed_data.get("info_type", ""),
+        parsed_data.get("volcano_activity", ""),
+    ]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+def make_volcano_observation_hash(parsed_data: Dict[str, Any]) -> str:
+    parts = [
+        parsed_data.get("head_title", ""),
+        parsed_data.get("target_datetime", ""),
+        parsed_data.get("info_type", ""),
+        parsed_data.get("headline_text", ""),
+    ]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
 class WeatherScheduler:
     def __init__(self, bot: discord.Client):
         self.bot = bot
@@ -169,7 +191,7 @@ class WeatherScheduler:
 
     @tasks.loop(minutes=1)
     async def check_warnings(self):
-        urls_to_check = [config.JMA_ATOM_REGULAR_URL]
+        urls_to_check = [config.JMA_ATOM_REGULAR_URL, config.JMA_ATOM_EQVOL_URL]
         for url in urls_to_check:
             entries = await asyncio.to_thread(fetch_atom_feed, url)
             if not entries:
@@ -187,12 +209,16 @@ class WeatherScheduler:
                 is_early_warning = "早期注意情報" in title
                 is_record_rain = "記録的短時間大雨情報" in title
                 is_flood = "指定河川洪水予報" in title
+                is_volcano_eruption = "噴火速報" in title
+                is_volcano_obs = "噴火に関する火山観測報" in title
                 is_commentary = (
                     not is_warning
                     and not is_heatstroke
                     and not is_early_warning
                     and not is_record_rain
                     and not is_flood
+                    and not is_volcano_eruption
+                    and not is_volcano_obs
                     and "気象情報" in title
                 )
                 if not (
@@ -201,6 +227,8 @@ class WeatherScheduler:
                     or is_early_warning
                     or is_record_rain
                     or is_flood
+                    or is_volcano_eruption
+                    or is_volcano_obs
                     or is_commentary
                 ):
                     continue
@@ -232,6 +260,14 @@ class WeatherScheduler:
 
                 if is_flood:
                     await self._process_flood_forecast(entry_link, unique_key)
+                    continue
+
+                if is_volcano_eruption:
+                    await self._process_volcano_eruption(entry_link, unique_key)
+                    continue
+
+                if is_volcano_obs:
+                    await self._process_volcano_observation(entry_link, unique_key)
                     continue
 
                 if is_commentary:
@@ -565,9 +601,87 @@ class WeatherScheduler:
         self.notified_hashes.add(content_hash)
         self.save_state()
 
+    async def _process_volcano_eruption(self, entry_link: str, unique_key: str):
+        xml_content = await asyncio.to_thread(fetch_xml_content, entry_link)
+        if not xml_content:
+            self.processed_events.add(unique_key)
+            return
+
+        parsed_data = parse_volcano_eruption_xml(xml_content)
+        if not parsed_data:
+            self.processed_events.add(unique_key)
+            return
+
+        content_hash = make_volcano_eruption_hash(parsed_data)
+        if content_hash in self.notified_hashes:
+            self.processed_events.add(unique_key)
+            self.save_state()
+            return
+
+        embed = create_volcano_eruption_embed(parsed_data)
+
+        sent_any = False
+        for ch_id in get_all_channels("alert"):
+            channel = self.bot.get_channel(ch_id)
+            if not isinstance(channel, TextChannel):
+                logger.warning(f"警報チャンネルが見つかりません: ID={ch_id}")
+                continue
+            try:
+                await channel.send(embed=embed)
+                sent_any = True
+            except discord.DiscordException as e:
+                logger.error(f"噴火速報送信失敗: channel={ch_id}, {e}")
+
+        if sent_any:
+            logger.info(f"噴火速報を送信しました: {parsed_data.get('head_title')}")
+
+        self.processed_events.add(unique_key)
+        self.notified_hashes.add(content_hash)
+        self.save_state()
+
     @check_warnings.before_loop
     async def _before_check_warnings(self):
         await self.bot.wait_until_ready()
 
     def stop(self):
         self.check_warnings.cancel()
+
+    async def _process_volcano_observation(self, entry_link: str, unique_key: str):
+        xml_content = await asyncio.to_thread(fetch_xml_content, entry_link)
+        if not xml_content:
+            self.processed_events.add(unique_key)
+            return
+
+        parsed_data = parse_volcano_observation_xml(xml_content)
+        if not parsed_data:
+            self.processed_events.add(unique_key)
+            return
+
+        content_hash = make_volcano_observation_hash(parsed_data)
+        if content_hash in self.notified_hashes:
+            self.processed_events.add(unique_key)
+            self.save_state()
+            return
+
+        embed = create_volcano_observation_embed(parsed_data)
+
+        sent_any = False
+        for ch_id in get_all_channels("alert"):
+            channel = self.bot.get_channel(ch_id)
+            if not isinstance(channel, TextChannel):
+                logger.warning(f"警報チャンネルが見つかりません: ID={ch_id}")
+                continue
+            try:
+                await channel.send(embed=embed)
+                sent_any = True
+            except discord.DiscordException as e:
+                logger.error(f"噴火に関する火山観測報送信失敗: channel={ch_id}, {e}")
+
+        if sent_any:
+            logger.info(
+                f"噴火に関する火山観測報を送信しました: {parsed_data.get('head_title')}"
+            )
+
+        self.processed_events.add(unique_key)
+        self.notified_hashes.add(content_hash)
+        self.save_state()

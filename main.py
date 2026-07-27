@@ -14,6 +14,8 @@ from src.jmaxml_parser import (
     parse_early_warning_xml,
     parse_record_rain_xml,
     parse_flood_forecast_xml,
+    parse_volcano_eruption_xml,
+    parse_volcano_observation_xml,
 )
 from src.discord_notifier import (
     create_warning_embed,
@@ -22,6 +24,8 @@ from src.discord_notifier import (
     create_early_warning_embed,
     create_record_rain_embed,
     create_flood_forecast_embed,
+    create_volcano_eruption_embed,
+    create_volcano_observation_embed,
 )
 from src.warning_map import create_warning_map_image
 from src.channel_settings import (
@@ -50,7 +54,8 @@ SAMPLE_COMMENTARY_FILE = os.path.join(config.DATA_DIR, "sample_commentary.xml")
 SAMPLE_EARLY_WARNING_FILE = os.path.join(config.DATA_DIR, "sample_early_warning.xml")
 SAMPLE_RECORD_RAIN_FILE = os.path.join(config.DATA_DIR, "sample_record_rain.xml")
 SAMPLE_FLOOD_FILE = os.path.join(config.DATA_DIR, "sample_flood.xml")
-
+SAMPLE_VOLCANO_FILE = os.path.join(config.DATA_DIR, "sample_volcano.xml")
+SAMPLE_VOLCANO_OBS_FILE = os.path.join(config.DATA_DIR, "sample_volcano_obs.xml")
 
 async def setup_hook():
     await tree.sync()
@@ -88,6 +93,8 @@ channel_group = app_commands.Group(name="channel", description="通知チャン�
         app_commands.Choice(name="早期注意情報", value="early_warning"),
         app_commands.Choice(name="記録的短時間大雨情報", value="record_rain"),
         app_commands.Choice(name="指定河川洪水予報", value="flood"),
+        app_commands.Choice(name="噴火速報", value="volcano"),
+        app_commands.Choice(name="噴火に関する火山観測報", value="volcano_obs"),
     ]
 )
 async def channel_set(
@@ -191,6 +198,8 @@ tree.add_command(channel_group)
         app_commands.Choice(name="早期注意情報", value="early_warning"),
         app_commands.Choice(name="記録的短時間大雨情報", value="record_rain"),
         app_commands.Choice(name="指定河川洪水予報", value="flood"),
+        app_commands.Choice(name="噴火速報", value="volcano"),
+        app_commands.Choice(name="噴火に関する火山観測報", value="volcano_obs")
     ]
 )
 async def test_alert(
@@ -209,6 +218,10 @@ async def test_alert(
         sample_file = SAMPLE_RECORD_RAIN_FILE
     elif type.value == "flood":
         sample_file = SAMPLE_FLOOD_FILE
+    elif type.value == "volcano":
+        sample_file = SAMPLE_VOLCANO_FILE
+    elif type.value == "volcano_obs":
+        sample_file = SAMPLE_VOLCANO_OBS_FILE
     else:
         sample_file = SAMPLE_COMMENTARY_FILE
 
@@ -239,6 +252,10 @@ async def test_alert(
         parsed_data = parse_record_rain_xml(xml_content)
     elif type.value == "flood":
         parsed_data = parse_flood_forecast_xml(xml_content)
+    elif type.value == "volcano":
+        parsed_data = parse_volcano_eruption_xml(xml_content)
+    elif type.value == "volcano_obs":
+        parsed_data = parse_volcano_observation_xml(xml_content)
     else:
         parsed_data = parse_commentary_xml(xml_content)
 
@@ -326,6 +343,20 @@ async def test_alert(
                 f"河川: {parsed_data.get('river_area_name', '---')}\n"
                 f"レベル: {parsed_data.get('level', '?')}\n"
                 f"第{parsed_data.get('serial', '?')}報"
+            )
+        elif type.value == "volcano":
+            embed = create_volcano_eruption_embed(parsed_data)
+            summary = (
+                f"タイトル: {parsed_data.get('head_title', '---')}\n"
+                f"火山: {parsed_data.get('volcano_name', '---')}\n"
+                f"活動状況: {parsed_data.get('volcano_activity', '---')[:50]}..."
+            )
+        elif type.value == "volcano_obs":
+            embed = create_volcano_observation_embed(parsed_data)
+            summary = (
+                f"タイトル: {parsed_data.get('head_title', '---')}\n"
+                f"火山: {parsed_data.get('volcano_name', '---')}\n"
+                f"火口: {parsed_data.get('crater_name', '---')}"
             )
         else:
             embed = create_commentary_embed(parsed_data)

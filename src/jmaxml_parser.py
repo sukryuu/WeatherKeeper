@@ -1031,3 +1031,110 @@ def parse_volcano_eruption_xml(xml_content: str) -> Optional[Dict[str, Any]]:
         "volcano_activity": volcano_activity,
         "affected_areas": affected_areas,
     }
+
+
+def parse_volcano_observation_xml(xml_content: str) -> Optional[Dict[str, Any]]:
+    xml_content = _ensure_jmx_namespaces(xml_content)
+    try:
+        root = ET.fromstring(xml_content)
+    except ET.ParseError as e:
+        logger.error(f"XMLのパースに失敗しました: {e}")
+        return None
+
+    control_title = _find_text(root, "default:Control/default:Title")
+    if "噴火に関する火山観測報" not in control_title:
+        logger.debug(f"噴火に関する火山観測報ではないためスキップ: {control_title}")
+        return None
+
+    head = None
+    for elem in root.iter():
+        if elem.tag.endswith("Head"):
+            head = elem
+            break
+
+    head_title = ""
+    info_type = ""
+    target_dt = ""
+    if head is not None:
+        for elem in head.iter():
+            tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+            if tag == "Title" and not head_title:
+                head_title = elem.text.strip() if elem.text else ""
+            elif tag == "InfoType":
+                info_type = elem.text.strip() if elem.text else ""
+            elif tag == "TargetDateTime":
+                target_dt = elem.text.strip() if elem.text else ""
+
+    headline_text = ""
+    for elem in root.iter():
+        if elem.tag.endswith("Headline"):
+            for child in elem:
+                tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                if tag == "Text" and child.text:
+                    headline_text = child.text.strip()
+                    break
+
+    volcano_name = ""
+    crater_name = ""
+    plume_height = ""
+    plume_direction = ""
+    other_observation = ""
+    event_time = ""
+
+    body = None
+    for elem in root.iter():
+        if elem.tag.endswith("Body"):
+            body = elem
+            break
+
+    if body is not None:
+        for elem in body.iter():
+            tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+
+            if tag == "EventDateTime" and not elem.attrib.get(
+                "significant", ""
+            ).endswith("UTC"):
+                if elem.text:
+                    event_time = elem.text.strip()
+
+            elif tag == "Area":
+                for child in elem:
+                    child_tag = (
+                        child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                    )
+                    if child_tag == "Name" and child.text and not volcano_name:
+                        volcano_name = child.text.strip()
+                    elif child_tag == "CraterName" and child.text and not crater_name:
+                        crater_name = child.text.strip()
+
+            elif tag == "ColorPlume":
+                for plume in elem:
+                    plume_tag = (
+                        plume.tag.split("}")[-1] if "}" in plume.tag else plume.tag
+                    )
+                    if plume_tag == "PlumeHeightAboveCrater":
+                        desc = plume.attrib.get("description")
+                        if desc:
+                            plume_height = desc
+                    elif plume_tag == "PlumeDirection":
+                        desc = plume.attrib.get("description")
+                        if desc:
+                            plume_direction = desc
+
+            elif tag == "OtherObservation":
+                if elem.text:
+                    other_observation = elem.text.strip()
+
+    return {
+        "head_title": head_title,
+        "control_title": control_title,
+        "info_type": info_type,
+        "target_datetime": target_dt,
+        "headline_text": headline_text,
+        "volcano_name": volcano_name,
+        "crater_name": crater_name,
+        "plume_height": plume_height,
+        "plume_direction": plume_direction,
+        "other_observation": other_observation,
+        "event_time": event_time,
+    }

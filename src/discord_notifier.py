@@ -354,3 +354,87 @@ def create_flood_forecast_embed(data: Dict[str, Any]) -> discord.Embed:
     embed.description = desc
     embed.set_footer(text="ソース: 気象庁")
     return embed
+
+
+VOLCANO_ERUPTION_COLOR = 0xB40000
+
+
+def create_volcano_eruption_embed(data: Dict[str, Any]) -> discord.Embed:
+    head_title = data.get("head_title", "噴火速報")
+    info_type = data.get("info_type", "")
+    volcano_activity = data.get("volcano_activity", "")
+    affected_areas = data.get("affected_areas", [])
+
+    embed = discord.Embed(
+        title=head_title,
+        color=VOLCANO_ERUPTION_COLOR,
+        timestamp=utcnow(),
+    )
+
+    lines = []
+    if volcano_activity:
+        lines.append(volcano_activity)
+        lines.append("")
+
+    if affected_areas:
+        lines.append(f"対象市町村等: {', '.join(affected_areas)}")
+        lines.append("")
+
+    if info_type and info_type != "発表":
+        lines.append(f"情報種別: {info_type}")
+
+    embed.description = "\n".join(lines) if lines else "詳細情報はありません。"
+    embed.set_footer(text="出典: 気象庁")
+    return embed
+
+VOLCANO_OBSERVATION_COLOR = 0xCC0000
+
+
+def create_volcano_observation_embed(data: Dict[str, Any]) -> discord.Embed:
+    head_title = data.get("head_title", "噴火に関する火山観測報")
+    info_type = data.get("info_type", "")
+    headline_text = data.get("headline_text", "")
+    volcano_name = data.get("volcano_name", "")
+    crater_name = data.get("crater_name", "")
+    plume_height = data.get("plume_height", "")
+    plume_direction = data.get("plume_direction", "")
+    other_observation = data.get("other_observation", "")
+    event_time = data.get("event_time", "")
+
+    embed = discord.Embed(
+        title=head_title,
+        color=VOLCANO_OBSERVATION_COLOR,
+        timestamp=utcnow(),
+    )
+
+    lines = []
+    if volcano_name:
+        lines.append(f"**火山名**: {volcano_name}")
+    if event_time:
+        lines.append(f"**日時**: {event_time}")
+
+    if headline_text:
+        lines.append("")
+        lines.append(headline_text)
+
+    if crater_name or plume_height or plume_direction or other_observation:
+        lines.append("")
+        lines.append("**【噴火の詳細】**")
+        if crater_name:
+            lines.append(f"火口: {crater_name}")
+        if plume_height:
+            lines.append(f"噴煙: {plume_height}")
+        if plume_direction:
+            lines.append(f"流向: {plume_direction}")
+        if other_observation:
+            lines.append("")
+            lines.append("**【観測情報】**")
+            lines.append(other_observation)
+
+    if info_type and info_type != "発表":
+        lines.append("")
+        lines.append(f"情報種別: {info_type}")
+
+    embed.description = "\n".join(lines) if lines else "詳細情報はありません。"
+    embed.set_footer(text="出典: 気象庁")
+    return embed

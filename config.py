@@ -23,6 +23,8 @@ JMA_ATOM_NON_REGULAR_URL = (
     "https://www.data.jma.go.jp/developer/xml/feed/non_regular.xml"
 )
 JMA_ATOM_REGULAR_URL = "https://www.data.jma.go.jp/developer/xml/feed/extra.xml"
-JMA_ATOM_EQVOL_URL = "https://www.data.jma.go.jp/developer/xml/feed/eqvol.xml"
+JMA_ATOM_EQVOL_URL = (
+    "https://www.data.jma.go.jp/developer/xml/feed/eqvol.xml"  # ←これが追加されているか
+)
 
 os.makedirs(DATA_DIR, exist_ok=True)
