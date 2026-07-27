@@ -959,3 +959,75 @@ def parse_flood_forecast_xml(xml_content: str) -> Optional[Dict[str, Any]]:
         "rainfall_series": rainfall_series,
         "water_stations": water_stations,
     }
+
+
+def parse_volcano_eruption_xml(xml_content: str) -> Optional[Dict[str, Any]]:
+    xml_content = _ensure_jmx_namespaces(xml_content)
+    try:
+        root = ET.fromstring(xml_content)
+    except ET.ParseError as e:
+        logger.error(f"XMLのパースに失敗しました: {e}")
+        return None
+
+    control_title = _find_text(root, "default:Control/default:Title")
+    if "噴火速報" not in control_title:
+        logger.debug(f"噴火速報ではないためスキップ: {control_title}")
+        return None
+
+    head = root.find(f"{{{NS_INFO}}}Head")
+    if head is None:
+        head = root.find(f"{{{NS_JMXML}}}Head")
+
+    head_title = _find_text(head, "info:Title")
+    info_type = _find_text(head, "info:InfoType")
+    target_dt = _find_text(head, "info:TargetDateTime")
+
+    volcano_name = ""
+    body = root.find(f"{{{NS_BODY}}}Body")
+    if body is None:
+        body = root.find(f"{{{NS_JMXML}}}Body")
+
+    if body is not None:
+        for volcano_info in body:
+            if not volcano_info.tag.endswith("VolcanoInfo"):
+                continue
+            if volcano_info.attrib.get("type") != "噴火速報":
+                continue
+            for item in volcano_info:
+                if not item.tag.endswith("Item"):
+                    continue
+                for child in item:
+                    if child.tag.endswith("Areas"):
+                        for area in child:
+                            if area.tag.endswith("Area"):
+                                volcano_name = _child_text(area, "Name")
+
+    volcano_activity = ""
+    affected_areas = []
+    if body is not None:
+        for content in body:
+            if content.tag.endswith("VolcanoInfoContent"):
+                for child in content:
+                    if child.tag.endswith("VolcanoActivity") and child.text:
+                        volcano_activity = child.text.strip()
+            elif content.tag.endswith("VolcanoInfo"):
+                if content.attrib.get("type") == "噴火速報（対象市町村等）":
+                    for item in content:
+                        if item.tag.endswith("Item"):
+                            for child in item:
+                                if child.tag.endswith("Areas"):
+                                    for area in child:
+                                        if area.tag.endswith("Area"):
+                                            name = _child_text(area, "Name")
+                                            if name and name not in affected_areas:
+                                                affected_areas.append(name)
+
+    return {
+        "head_title": head_title,
+        "control_title": control_title,
+        "info_type": info_type,
+        "target_datetime": target_dt,
+        "volcano_name": volcano_name,
+        "volcano_activity": volcano_activity,
+        "affected_areas": affected_areas,
+    }
