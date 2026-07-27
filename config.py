@@ -19,4 +19,10 @@ JMA_ATOM_REGULAR_URL = "https://www.data.jma.go.jp/developer/xml/feed/extra.xml"
 DATA_DIR = "data"
 PROCESSED_EVENTS_FILE = os.path.join(DATA_DIR, "processed_events.json")
 
+JMA_ATOM_NON_REGULAR_URL = (
+    "https://www.data.jma.go.jp/developer/xml/feed/non_regular.xml"
+)
+JMA_ATOM_REGULAR_URL = "https://www.data.jma.go.jp/developer/xml/feed/extra.xml"
+JMA_ATOM_EQVOL_URL = "https://www.data.jma.go.jp/developer/xml/feed/eqvol.xml"
+
 os.makedirs(DATA_DIR, exist_ok=True)
