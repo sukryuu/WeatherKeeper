@@ -52,17 +52,6 @@ def _find_text(elem: Optional[ET.Element], path: str) -> str:
 
 
 def extract_kind_and_level(kind_name: str) -> tuple[str, int]:
-    """
-    種別名からベース名とレベルを抽出する
-
-    例:
-      "レベル5大雨特別警報（浸水害）" → ("大雨", 5)
-      "レベル4大雨危険警報（浸水害）" → ("大雨", 4)
-      "レベル3大雨警報（浸水害）"     → ("大雨", 3)
-      "レベル2大雨注意報"             → ("大雨", 2)
-      "レベル3暴風警報"               → ("暴風", 3)
-      "レベル2雷注意報"               → ("雷", 2)
-    """
     level = 1
 
     level_match = re.search(r"レベル([２-５])", kind_name)

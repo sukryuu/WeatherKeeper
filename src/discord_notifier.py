@@ -111,7 +111,7 @@ def create_heatstroke_embed(data: Dict[str, Any]) -> discord.Embed:
         lines.append("")
 
     embed.description = "\n".join(lines)
-    embed.set_footer(text="出典: 気象庁・環境省 熱中症警戒アラート")
+    embed.set_footer(text="ソース: 気象庁・環境省")
     return embed
 
 
@@ -173,7 +173,7 @@ def create_commentary_embed(data: Dict[str, Any]) -> discord.Embed:
     if len(desc) > 4000:
         desc = desc[:3997] + "..."
     embed.description = desc
-    embed.set_footer(text="出典: 気象庁")
+    embed.set_footer(text="ソース: 気象庁")
     return embed
 
 EARLY_WARNING_COLOR = 0x4A89DC
@@ -196,12 +196,12 @@ def create_early_warning_embed(data: Dict[str, Any]) -> discord.Embed:
 
     if info_type == "取消":
         embed.description = "この早期注意情報は取り消されました。"
-        embed.set_footer(text="出典: 気象庁")
+        embed.set_footer(text="ソース: 気象庁")
         return embed
 
     if not areas:
         embed.description = "警報級の可能性が「高」または「中」の区域はありません。"
-        embed.set_footer(text="出典: 気象庁")
+        embed.set_footer(text="ソース: 気象庁")
         return embed
 
     lines = []
@@ -223,7 +223,7 @@ def create_early_warning_embed(data: Dict[str, Any]) -> discord.Embed:
     if len(desc) > 4000:
         desc = desc[:3997] + "..."
     embed.description = desc
-    embed.set_footer(text="出典: 気象庁")
+    embed.set_footer(text="ソース: 気象庁")
     return embed
 
 
@@ -254,7 +254,7 @@ def create_record_rain_embed(data: Dict[str, Any]) -> discord.Embed:
         lines.append(f"情報種別: {info_type}")
 
     embed.description = "\n".join(lines) if lines else "詳細情報はありません。"
-    embed.set_footer(text="出典: 気象庁")
+    embed.set_footer(text="ソース: 気象庁")
     return embed
 
 
@@ -338,7 +338,7 @@ def create_flood_forecast_embed(data: Dict[str, Any]) -> discord.Embed:
                     unit = s.get("unit", "m")
                     parts.append(f"{s['level_m']}{unit}")
                 if s.get("level_rank"):
-                    parts.append(f"Lv{s['level_rank']}")
+                    parts.append(f"レベル{s['level_rank']}")
                 if has_discharge and s.get("discharge"):
                     d_unit = s.get("discharge_unit", "m3/s")
                     parts.append(f"{s['discharge']}{d_unit}")
@@ -352,5 +352,5 @@ def create_flood_forecast_embed(data: Dict[str, Any]) -> discord.Embed:
     if len(desc) > 4000:
         desc = desc[:3997] + "..."
     embed.description = desc
-    embed.set_footer(text="出典: 気象庁・河川管理者")
+    embed.set_footer(text="ソース: 気象庁")
     return embed

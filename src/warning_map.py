@@ -162,33 +162,39 @@ def _extract_polygons(geometry: dict) -> List[List[Tuple[float, float]]]:
     return polygons
 
 
-def _match_heatstroke_pref(props: dict, area_names: List[str]) -> bool:
-    regionname = props.get("regionname", "")
+PREF_NAME_TO_CODE: Dict[str, str] = {}
+
+
+def _build_pref_mapping():
+    global PREF_NAME_TO_CODE
+    if PREF_NAME_TO_CODE:
+        return
+    features = _load_city_features()
+    for f in features:
+        props = f.get("properties", {})
+        regionname = props.get("regionname", "")
+        regioncode = props.get("regioncode", "")
+        if not regionname or not regioncode:
+            continue
+        m = re.match(r"^(.+?[都道府県])", regionname)
+        if m:
+            pref_name = m.group(1)
+            pref_code = str(regioncode)[:2]
+            PREF_NAME_TO_CODE[pref_name] = pref_code
+
+
+def _match_heatstroke_code(props: dict, area_names: List[str]) -> bool:
+    pref_code = props.get("pref_code", "")
+    if not pref_code:
+        return False
     for area_name in area_names:
         if not area_name:
             continue
-        matched = False
         m = re.search(r"^(.+?)[（(](.+?)[）)]$", area_name)
-        if m:
-            base_area = m.group(1)
-            sub_area = m.group(2)
-            if (
-                regionname == sub_area
-                or regionname == base_area
-                or regionname == f"{base_area}（{sub_area}）"
-            ):
-                matched = True
-        else:
-            pref_name = re.sub(r"[都道府県]$", "", area_name)
-            if pref_name in regionname or regionname in area_name:
-                matched = True
-
-        if matched:
-            logger.info(
-                f"[MATCH] area_name={area_name} matched regionname={regionname}"
-            )
+        target_pref_name = m.group(1) if m else area_name
+        target_code = PREF_NAME_TO_CODE.get(target_pref_name)
+        if target_code and target_code == pref_code:
             return True
-
     return False
 
 
@@ -245,14 +251,14 @@ def create_warning_map_image(
                 drawn_x.extend(xs)
                 drawn_y.extend(ys)
 
-    # 2. 熱中症警戒アラートの描画（府県・細分区域単位）
+    _build_pref_mapping()
     if heatstroke_area_names:
         for feature in _load_pref_features():
             props = feature.get("properties", {})
             geometry = feature.get("geometry", {})
             if not geometry:
                 continue
-            if not _match_heatstroke_pref(props, heatstroke_area_names):
+            if not _match_heatstroke_code(props, heatstroke_area_names):
                 continue
             for poly_coords in _extract_polygons(geometry):
                 patch = MplPolygon(
